@@ -281,3 +281,38 @@ class QueryManager:
             print(f"  {game[5]}: {game[9]}")
         
         conn.close()
+
+    def big_game_stats(self):
+        """查看大局统计"""
+        from big_game_manager import BigGameManager
+        bgm = BigGameManager()
+        
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        
+        # 列出最近的大局
+        c.execute('''
+            SELECT id, created_at, round_count, is_finished
+            FROM big_games
+            ORDER BY id DESC LIMIT 10
+        ''')
+        
+        big_games = c.fetchall()
+        
+        if not big_games:
+            print("暂无大局记录")
+            conn.close()
+            return
+        
+        print("\n=== 最近大局 ===")
+        for bg in big_games:
+            status = "✅" if bg[3] else "⏳"
+            print(f"  #{bg[0]} {status} ({bg[1][:16]}) - {bg[2]}小局")
+        
+        try:
+            bg_id = int(input("\n请输入要查看的大局ID: "))
+            bgm.get_big_game_stats(bg_id)
+        except ValueError:
+            print("无效输入")
+        
+        conn.close()

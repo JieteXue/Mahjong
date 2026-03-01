@@ -263,86 +263,126 @@ class GameManager:
             return random.choice(honors)
         
         return f"{number}{suit}"
-    
-    def create_game(self, selected_users):
-        """创建新游戏"""
+
+    def create_game(self, selected_users, big_game=None, round_number=1):
+        """创建新游戏，支持大局和小局"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        
+
         # 获取当前活跃赛季
         try:
             from season_manager import SeasonManager
             season_mgr = SeasonManager()
             active_season = season_mgr.get_active_season()
-            
-            season_id = None
-            if active_season:
-                season_id = active_season[0]
-                print(f"当前赛季: {active_season[1]}")
+            season_id = active_season[0] if active_season else None
         except:
             season_id = None
-            print("⚠️ 赛季功能未启用")
-        
+
         # 随机生成财神
         bao = self.generate_bao()
-        
+
         dealer_id = selected_users[0][0]
-        
-        # 检查games表是否有season_id列
+
+        # 确定大局ID和小局序号
+        big_game_id = big_game.id if big_game else 0
+        round_num = round_number
+
+        # 获取初始分数（如果是大局中的后续小局，使用当前分数）
+        if big_game and round_number > 1:
+            initial_scores = big_game.current_scores
+        else:
+            initial_scores = [1000, 1000, 1000, 1000]
+
+        # 检查games表结构
         c.execute("PRAGMA table_info(games)")
         columns = [col[1] for col in c.fetchall()]
-        
-        if 'season_id' in columns:
+
+        if 'big_game_id' in columns and 'round_number' in columns:
             c.execute('''
                 INSERT INTO games 
-                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao, season_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao, season_id,
+                 big_game_id, round_number, score1, score2, score3, score4)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 selected_users[0][0], selected_users[1][0],
                 selected_users[2][0], selected_users[3][0],
-                dealer_id, bao, season_id
+                dealer_id, bao, season_id,
+                big_game_id, round_num,
+                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
+            ))
+        elif 'season_id' in columns:
+            c.execute('''
+                INSERT INTO games 
+                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao, season_id,
+                 score1, score2, score3, score4)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                selected_users[0][0], selected_users[1][0],
+                selected_users[2][0], selected_users[3][0],
+                dealer_id, bao, season_id,
+                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
             ))
         else:
             c.execute('''
                 INSERT INTO games 
-                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao,
+                 score1, score2, score3, score4)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 selected_users[0][0], selected_users[1][0],
                 selected_users[2][0], selected_users[3][0],
-                dealer_id, bao
+                dealer_id, bao,
+                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
             ))
-        
+
         game_id = c.lastrowid
         conn.commit()
         conn.close()
-        
+
         return Game(
             game_id=game_id,
             players=selected_users,
-            scores=[1000, 1000, 1000, 1000],
+            scores=initial_scores.copy(),
             dealer_id=dealer_id,
             lianzhuang=0,
             bao=bao
         )
     
-    def update_user_stats(self, game):
-        """游戏结束后更新用户统计 - 使用独立连接"""
+    def update_user_stats(self, game, is_big_game_end=False):
+        """游戏结束后更新用户统计
+        Args:
+            game: Game对象
+            is_big_game_end: 是否是大局结束（大局结束时才更新大局统计）
+        """
         print("\n📊 正在更新用户统计...")
         
-        # 使用独立的数据库连接
         conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
+            
+            # 检查是否有新字段
+            c.execute("PRAGMA table_info(users)")
+            columns = [col[1] for col in c.fetchall()]
+            has_big_game_fields = 'total_big_games' in columns
             
             # 获取游戏结束时的最终分数
             final_scores = game.scores
             print(f"最终分数: {final_scores}")
             
             for i, (pid, name) in enumerate(game.players):
-                # 计算该玩家的净胜分变化（最终分数 - 初始分数1000）
-                score_change = final_scores[i] - 1000
+                # 查询初始分数（从数据库读取）
+                c.execute('''
+                    SELECT score1, score2, score3, score4 FROM games WHERE id=?
+                ''', (game.id,))
+                initial = c.fetchone()
+                if initial:
+                    initial_score = initial[i]
+                else:
+                    initial_score = 1000
+                
+                # 计算该玩家在本小局的净胜分变化
+                score_change = final_scores[i] - initial_score
                 
                 # 查询该玩家在本局中是否有胡牌操作
                 c.execute('''
@@ -351,25 +391,79 @@ class GameManager:
                 ''', (game.id, pid))
                 has_win = c.fetchone()[0] > 0
                 
-                print(f"玩家 {name}: 分数变化 {score_change:+d}, 是否胡牌: {has_win}")
+                print(f"玩家 {name}: 小局变化 {score_change:+d}, 是否胡牌: {has_win}")
                 
-                # 更新用户统计
-                c.execute('''
-                    UPDATE users SET 
-                        total_games = total_games + 1,
-                        total_wins = total_wins + ?,
-                        net_score = net_score + ?
-                    WHERE id = ?
-                ''', (1 if has_win else 0, score_change, pid))
+                if has_big_game_fields:
+                    # 有大局小局统计字段
+                    # 更新小局统计
+                    c.execute('''
+                        UPDATE users SET 
+                            total_small_games = total_small_games + 1,
+                            total_wins = total_wins + ?,
+                            net_score = net_score + ?
+                        WHERE id = ?
+                    ''', (1 if has_win else 0, score_change, pid))
+                    
+                    # 如果是大局结束，更新大局统计
+                    if is_big_game_end:
+                        # 计算大局总变化（从大局开始到结束）
+                        c.execute('''
+                            SELECT start_scores FROM big_games 
+                            WHERE id=? AND player1_id=? OR player2_id=? OR player3_id=? OR player4_id=?
+                        ''', (game.big_game_id, pid, pid, pid, pid))
+                        big_game_data = c.fetchone()
+                        
+                        if big_game_data:
+                            start_scores = json.loads(big_game_data[0])
+                            # 找到该玩家的初始大局分数
+                            player_idx = -1
+                            for j, (p, _) in enumerate(game.players):
+                                if p == pid:
+                                    player_idx = j
+                                    break
+                                
+                            if player_idx >= 0:
+                                big_score_change = final_scores[player_idx] - start_scores[player_idx]
+                                
+                                # 查询该玩家在整个大局中是否有胡牌（只要有任何一小局胡牌就算大局胜）
+                                c.execute('''
+                                    SELECT COUNT(*) FROM actions a
+                                    JOIN games g ON a.game_id = g.id
+                                    WHERE g.big_game_id=? AND a.action_type='hupai' AND a.player_id=?
+                                ''', (game.big_game_id, pid))
+                                has_big_win = c.fetchone()[0] > 0
+                                
+                                c.execute('''
+                                    UPDATE users SET 
+                                        total_big_games = total_big_games + 1,
+                                        total_big_wins = total_big_wins + ?
+                                    WHERE id = ?
+                                ''', (1 if has_big_win else 0, pid))
+                else:
+                    # 没有大局字段，使用原来的统计方式
+                    c.execute('''
+                        UPDATE users SET 
+                            total_games = total_games + 1,
+                            total_wins = total_wins + ?,
+                            net_score = net_score + ?
+                        WHERE id = ?
+                    ''', (1 if has_win else 0, score_change, pid))
             
             conn.commit()
             
-            # 验证更新是否成功
-            c.execute("SELECT id, username, total_games, total_wins, net_score FROM users")
+            # 验证更新
+            if has_big_game_fields:
+                c.execute("SELECT id, username, total_small_games, total_wins, net_score, total_big_games, total_big_wins FROM users")
+            else:
+                c.execute("SELECT id, username, total_games, total_wins, net_score FROM users")
+            
             updated_users = c.fetchall()
             print("\n✅ 更新后的用户统计:")
             for user in updated_users:
-                print(f"  {user[1]}: {user[2]}局 {user[3]}胜 净胜分:{user[4]:+d}")
+                if len(user) > 5:
+                    print(f"  {user[1]}: 小局{user[2]}局 {user[3]}胜 净胜分{user[4]:+d} 大局{user[5]}局 {user[6]}胜")
+                else:
+                    print(f"  {user[1]}: {user[2]}局 {user[3]}胜 净胜分{user[4]:+d}")
                 
         except Exception as e:
             print(f"❌ 更新用户统计时出错: {e}")

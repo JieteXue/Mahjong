@@ -7,6 +7,7 @@ from user_manager import UserManager
 from season_manager import SeasonManager
 from game_manager import GameManager
 from query_manager import QueryManager
+from big_game_manager import BigGameManager
 
 class MahjongSystem:
     def __init__(self):
@@ -14,8 +15,11 @@ class MahjongSystem:
         self.user_mgr = UserManager()
         self.season_mgr = SeasonManager()
         self.game_mgr = GameManager()
+        self.big_game_mgr = BigGameManager()
         self.query_mgr = QueryManager()
         self.current_game = None
+        self.current_big_game = None
+        self.current_round = 1
     
     def clear_screen(self):
         """清屏"""
@@ -102,10 +106,11 @@ class MahjongSystem:
             print("2. 全局统计")
             print("3. 最近牌局记录")
             print("4. 查看调整记录")
+            print("5. 查看大局统计")
             print("0. 返回主菜单")
-            
+
             choice = input("请选择: ")
-            
+
             if choice == '1':
                 self.query_mgr.user_stats()
             elif choice == '2':
@@ -114,6 +119,8 @@ class MahjongSystem:
                 self.query_mgr.recent_games()
             elif choice == '4':
                 self.view_adjustment_logs()
+            elif choice == '5':
+                self.query_mgr.big_game_stats()
             elif choice == '0':
                 break
             input("\n按回车继续...")
@@ -175,36 +182,37 @@ class MahjongSystem:
             input("\n按回车继续...")
     
     def game_menu(self):
-        """开始游戏界面"""
+        """开始游戏界面 - 支持大局"""
         self.clear_screen()
         print("\n--- 开始新牌局 ---")
-        
+
         users = self.user_mgr.get_all_users()
         if len(users) < 4:
             print(f"❌ 错误: 至少需要4个已注册用户才能开始游戏！")
             print(f"当前用户数: {len(users)}")
             input("按回车返回...")
             return
-        
+
+        # 选择4个玩家
         selected = []
         for i in range(4):
             while True:
                 self.clear_screen()
                 print(f"\n--- 选择第 {i+1} 个玩家 ---")
-                
+
                 conn = sqlite3.connect('mahjong.db')
                 c = conn.cursor()
                 c.execute("SELECT id, username FROM users ORDER BY username")
                 all_users = c.fetchall()
                 conn.close()
-                
+
                 print("序号 | 用户名")
                 print("-" * 20)
                 for idx, (uid, name) in enumerate(all_users, 1):
                     selected_ids = [s[0] for s in selected]
                     selected_flag = " (已选)" if uid in selected_ids else ""
                     print(f"{idx:2d}   | {name}{selected_flag}")
-                
+
                 try:
                     idx = int(input(f"\n请选择第 {i+1} 个玩家 (输入序号): "))
                     if 1 <= idx <= len(all_users):
@@ -221,77 +229,180 @@ class MahjongSystem:
                 except ValueError:
                     print("请输入有效数字")
                     input("按回车继续...")
-        
+
         self.clear_screen()
         print("\n--- 确认玩家 ---")
         for i, (_, name) in enumerate(selected, 1):
             print(f"玩家{i}: {name}")
-        
+
+        # 询问是否开始新大局
+        print("\n1. 开始新大局")
+        print("2. 继续现有大局")
+        print("3. 单局模式（不关联大局）")
+
+        mode = input("请选择(1-3): ").strip()
+
+        if mode == '1':
+            # 创建新大局
+            active_season = self.season_mgr.get_active_season()
+            season_id = active_season[0] if active_season else None
+            self.current_big_game = self.big_game_mgr.create_big_game(selected, season_id)
+            self.current_round = 1
+            print(f"开始新大局 #{self.current_big_game.id}")
+
+        elif mode == '2':
+            # 继续现有大局 - 这里简化处理，实际应该让用户选择
+            print("功能开发中，使用单局模式")
+            self.current_big_game = None
+            self.current_round = 1
+
+        else:
+            # 单局模式
+            self.current_big_game = None
+            self.current_round = 1
+
         confirm = input("\n确认开始游戏？(y/n): ").lower()
         if confirm != 'y':
             print("已取消创建牌局")
             input("按回车返回...")
             return
-        
-        self.current_game = self.game_mgr.create_game(selected)
+
+        # 创建第一小局
+        self.current_game = self.game_mgr.create_game(
+            selected, 
+            big_game=self.current_big_game,
+            round_number=self.current_round
+        )
+
+        # 如果是在大局中，关联小局到大局
+        if self.current_big_game:
+            self.big_game_mgr.update_small_game_big_game(
+                self.current_game.id,
+                self.current_big_game.id,
+                self.current_round
+            )
+            self.current_big_game.add_small_game(self.current_game.id)
+
         self.game_play_loop()
     
     def game_play_loop(self):
-        """游戏进行中的交互界面"""
-        while not self.current_game.is_finished:
-            self.clear_screen()
-            print("\n=== 当前牌局 ===")
-            self.current_game.show_status()
-            print("\n操作菜单:")
-            print("1. 白板杠")
-            print("2. 胡牌结算")
-            print("3. 流局")
-            print("4. 显示当前分数")
-            print("5. 🔧 紧急调分")
-            print("0. 结束牌局")
+        """游戏进行中的交互界面 - 支持连续小局"""
+        while True:
+            while not self.current_game.is_finished:
+                self.clear_screen()
 
-            choice = input("请选择: ")
+                # 显示大局信息
+                if self.current_big_game:
+                    self.current_big_game.show_status()
+                    print(f"当前小局: 第 {self.current_round} 局")
+                    print("-" * 40)
 
-            if choice == '1':
-                self.current_game.baiban_input()
-                input("按回车继续...")
-            elif choice == '2':
-                self.current_game.hupai_input()
-            elif choice == '3':
-                self.current_game.liuju()
-                break
-            elif choice == '4':
+                print("\n=== 当前小局 ===")
                 self.current_game.show_status()
-                input("按回车继续...")
-            elif choice == '5':
-                self.current_game.emergency_adjust()
-                input("按回车继续...")
-            elif choice == '0':
+                print("\n操作菜单:")
+                print("1. 白板杠")
+                print("2. 胡牌结算")
+                print("3. 流局")
+                print("4. 显示当前分数")
+                print("5. 🔧 紧急调分")
+                print("0. 结束牌局")
+
+                choice = input("请选择: ")
+
+                if choice == '1':
+                    self.current_game.baiban_input()
+                    input("按回车继续...")
+                elif choice == '2':
+                    self.current_game.hupai_input()
+                elif choice == '3':
+                    self.current_game.liuju()
+                    break
+                elif choice == '4':
+                    self.current_game.show_status()
+                    input("按回车继续...")
+                elif choice == '5':
+                    self.current_game.emergency_adjust()
+                    input("按回车继续...")
+                elif choice == '0':
+                    self.current_game.end_game()
+                    break
+                
+            # 小局结束，更新统计
+            if self.current_game:
+                print("\n" + "=" * 50)
+                print(f"第 {self.current_round} 小局结束")
+                print("=" * 50)
+
+                # 显示最终分数
+                print("本局最终分数:")
+                for i, (pid, name) in enumerate(self.current_game.players):
+                    print(f"  {name}: {self.current_game.scores[i]}")
+
+                # 保存小局数据
                 self.current_game.end_game()
-                break
-            
-        # 游戏结束，更新用户统计
-        if self.current_game:
-            print("\n" + "=" * 50)
-            print("牌局结束，正在更新统计数据...")
-            print("=" * 50)
 
-            # 显示最终分数
-            print("最终分数:")
-            for i, (pid, name) in enumerate(self.current_game.players):
-                print(f"  {name}: {self.current_game.scores[i]}")
+                # 更新大局分数
+                if self.current_big_game:
+                    self.current_big_game.update_scores(self.current_game.scores)
 
-            # 先结束牌局（保存分数到数据库）
-            self.current_game.end_game()
+                # 更新用户统计（小局结束，不是大局结束）
+                self.game_mgr.update_user_stats(self.current_game, is_big_game_end=False)
 
-            # 更新统计（使用独立的连接）
-            self.game_mgr.update_user_stats(self.current_game)
+                # 关闭小局连接
+                self.current_game.close_connection()
 
-            # 关闭游戏对象的连接
-            self.current_game.close_connection()
+                # 询问是否继续下一小局
+                if self.current_big_game:
+                    print(f"\n大局 #{self.current_big_game.id} 当前分数:")
+                    for i, (pid, name) in enumerate(self.current_big_game.players):
+                        change = self.current_big_game.current_scores[i] - self.current_big_game.start_scores[i]
+                        print(f"  {name}: {self.current_big_game.current_scores[i]} 分 ({change:+d})")
 
-            print("\n✅ 数据更新完成！")
+                    cont = input("\n是否继续下一小局？(y/n, 输入'end'结束大局): ").lower()
 
+                    if cont == 'end':
+                        # 结束大局
+                        self.current_big_game.end_big_game()
+                        # 大局结束，更新大局统计
+                        self.game_mgr.update_user_stats(self.current_game, is_big_game_end=True)
+                        break
+                    elif cont == 'y':
+                        # 继续下一小局
+                        self.current_round += 1
+
+                        # 庄家轮换：上一局的赢家是下一局的庄家
+                        # 这里简化处理，实际应该从游戏状态获取
+                        next_dealer = self.current_game.dealer_id
+
+                        # 创建新小局，使用当前大局分数作为初始分数
+                        self.current_game = self.game_mgr.create_game(
+                            self.current_big_game.players,
+                            big_game=self.current_big_game,
+                            round_number=self.current_round
+                        )
+
+                        # 关联到大局
+                        self.big_game_mgr.update_small_game_big_game(
+                            self.current_game.id,
+                            self.current_big_game.id,
+                            self.current_round
+                        )
+                        self.current_big_game.add_small_game(self.current_game.id)
+
+                        # 继续循环
+                        continue
+                    else:
+                        # 不继续，结束大局
+                        self.current_big_game.end_big_game()
+                        break
+                else:
+                    # 单局模式，直接结束
+                    break
+                
+            # 退出循环
+            break
+        
+        print("\n✅ 牌局全部结束！")
         input("\n按回车返回主菜单...")
     
     def backup_database(self):
