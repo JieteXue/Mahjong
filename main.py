@@ -11,6 +11,10 @@ from query_manager import QueryManager
 class MahjongSystem:
     def __init__(self):
         init_db()
+        from maintenance_manager import MaintenanceManager
+        maint_mgr = MaintenanceManager()
+        maint_mgr.check_database_integrity()
+
         self.user_mgr = UserManager()
         self.season_mgr = SeasonManager()
         self.game_mgr = GameManager()
@@ -148,39 +152,69 @@ class MahjongSystem:
             elif choice == '0':
                 break
             input("\n按回车继续...")
-    
+
     def maintenance_menu(self):
         """数据维护界面"""
+        # 创建维护管理器实例
+        from maintenance_manager import MaintenanceManager
+        maint_mgr = MaintenanceManager()
+
         while True:
             self.clear_screen()
-            print("\n" + "=" * 50)
+            print("\n" + "=" * 60)
             print("⚠️  数据维护")
-            print("=" * 50)
-            print("1. 备份数据库")
-            print("2. 清空所有数据")
-            print("3. 只清空大局记录")      # 修改
-            print("4. 只清空小局记录")      # 新增
-            print("5. 只清空操作记录")
-            print("6. 重置用户积分")
-            print("0. 返回主菜单")
-            print("=" * 50)
-            
+            print("=" * 60)
+            print("1. 💾 备份数据库")
+            print("2. 🗑️ 清空所有数据")
+            print("3. 🎮 只清空大局记录")
+            print("4. 📋 只清空小局记录")
+            print("5. 📝 只清空操作记录")
+            print("6. 👤 重置用户积分")
+            print("7. 🔧 压缩数据库")
+            print("8. 🔍 检查数据库完整性")
+            print("9. 📤 导出数据到CSV")
+            print("0. ↩️ 返回主菜单")
+            print("=" * 60)
+
+            # 显示当前数据库状态
+            try:
+                conn = sqlite3.connect('mahjong.db')
+                c = conn.cursor()
+                c.execute("SELECT COUNT(*) FROM users")
+                user_count = c.fetchone()[0]
+                c.execute("SELECT COUNT(*) FROM games")
+                game_count = c.fetchone()[0]
+                c.execute("SELECT COUNT(*) FROM rounds")
+                round_count = c.fetchone()[0]
+                conn.close()
+                print(f"当前状态: {user_count}用户 | {game_count}大局 | {round_count}小局")
+            except:
+                pass
+            print("=" * 60)
+
             choice = input("请选择: ").strip()
-            
+
             if choice == '1':
-                self.backup_database()
+                maint_mgr.backup_database()
             elif choice == '2':
-                self.clear_all_data()
+                maint_mgr.clear_all_data()
             elif choice == '3':
-                self.clear_games_only()      # 清空大局
+                maint_mgr.clear_games_only()
             elif choice == '4':
-                self.clear_rounds_only()     # 清空小局
+                maint_mgr.clear_rounds_only()
             elif choice == '5':
-                self.clear_actions_only()
+                maint_mgr.clear_actions_only()
             elif choice == '6':
-                self.reset_user_scores()
+                maint_mgr.reset_user_scores()
+            elif choice == '7':
+                maint_mgr.vacuum_database()
+            elif choice == '8':
+                maint_mgr.check_database_integrity()
+            elif choice == '9':
+                maint_mgr.export_to_csv()
             elif choice == '0':
                 break
+            
             input("\n按回车继续...")
     
     def game_menu(self):
@@ -410,149 +444,6 @@ class MahjongSystem:
 
         input("\n按回车返回主菜单...")
     
-    def backup_database(self):
-        """备份数据库"""
-        import shutil
-        from datetime import datetime
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_file = f"mahjong_backup_{timestamp}.db"
-        
-        try:
-            shutil.copy2('mahjong.db', backup_file)
-            print(f"✅ 数据库已备份到: {backup_file}")
-        except Exception as e:
-            print(f"❌ 备份失败: {e}")
-    
-    def clear_all_data(self):
-        """清空所有数据"""
-        print("\n⚠️  警告：这将删除所有用户、大局、小局、赛季数据！")
-        
-        self.backup_database()
-        
-        confirm1 = input("请输入 'DELETE' 确认: ").strip()
-        if confirm1 != 'DELETE':
-            print("操作已取消")
-            return
-        
-        confirm2 = input("最后确认？(y/n): ").lower()
-        if confirm2 != 'y':
-            print("操作已取消")
-            return
-        
-        conn = sqlite3.connect('mahjong.db')
-        c = conn.cursor()
-        
-        c.execute("DELETE FROM baiban_records")
-        c.execute("DELETE FROM actions")
-        c.execute("DELETE FROM rounds")
-        c.execute("DELETE FROM games")
-        c.execute("DELETE FROM seasons")
-        c.execute("DELETE FROM users")
-        c.execute("DELETE FROM sqlite_sequence")
-        
-        conn.commit()
-        conn.close()
-        
-        print("✅ 所有数据已清空！")
-    
-    def clear_games_only(self):
-        """只清空大局记录"""
-        print("\n⚠️  警告：这将删除所有大局、小局和操作记录！")
-        
-        self.backup_database()
-        
-        confirm = input("确定清空？(y/n): ").lower()
-        if confirm != 'y':
-            print("操作已取消")
-            return
-        
-        conn = sqlite3.connect('mahjong.db')
-        c = conn.cursor()
-        
-        c.execute("DELETE FROM baiban_records")
-        c.execute("DELETE FROM actions")
-        c.execute("DELETE FROM rounds")
-        c.execute("DELETE FROM games")
-        
-        conn.commit()
-        conn.close()
-        
-        print("✅ 大局记录已清空！")
-    
-    def clear_rounds_only(self):
-        """只清空小局记录"""
-        print("\n⚠️  警告：这将删除所有小局记录和操作记录，但保留大局框架！")
-        
-        self.backup_database()
-        
-        confirm = input("确定清空？(y/n): ").lower()
-        if confirm != 'y':
-            print("操作已取消")
-            return
-        
-        conn = sqlite3.connect('mahjong.db')
-        c = conn.cursor()
-        
-        c.execute("DELETE FROM baiban_records")
-        c.execute("DELETE FROM actions")
-        c.execute("DELETE FROM rounds")
-        
-        # 重置大局中的小局数
-        c.execute("UPDATE games SET total_rounds = 0")
-        
-        conn.commit()
-        conn.close()
-        
-        print("✅ 小局记录已清空！")
-    
-    def clear_actions_only(self):
-        """只清空操作记录"""
-        print("\n⚠️  警告：这将删除所有操作记录！")
-        
-        self.backup_database()
-        
-        confirm = input("确定清空？(y/n): ").lower()
-        if confirm != 'y':
-            print("操作已取消")
-            return
-        
-        conn = sqlite3.connect('mahjong.db')
-        c = conn.cursor()
-        
-        c.execute("DELETE FROM actions")
-        
-        conn.commit()
-        conn.close()
-        
-        print("✅ 操作记录已清空！")
-    
-    def reset_user_scores(self):
-        """重置用户积分"""
-        print("\n⚠️  警告：这将重置所有用户积分为0")
-        
-        self.backup_database()
-        
-        confirm = input("确定重置？(y/n): ").lower()
-        if confirm != 'y':
-            print("操作已取消")
-            return
-        
-        conn = sqlite3.connect('mahjong.db')
-        c = conn.cursor()
-        
-        c.execute('''
-            UPDATE users SET 
-                total_games = 0,
-                total_rounds = 0,
-                total_wins = 0,
-                net_score = 0
-        ''')
-        
-        conn.commit()
-        conn.close()
-        
-        print("✅ 用户积分已重置！")
     
     def view_adjustment_logs(self):
         """查看调整记录"""
