@@ -78,13 +78,13 @@ class MahjongSystem:
             print("5. 💰 手动调整积分")
             print("6. 💸 用户间转账")
             print("0. 返回主菜单")
-            
+
             choice = input("请选择: ")
-            
+
             if choice == '1':
                 self.user_mgr.register()
             elif choice == '2':
-                self.user_mgr.list_users(show_stats=True)  # 修改这里，显示详细统计
+                self.user_mgr.list_users(show_stats=False)
             elif choice == '3':
                 self.user_mgr.update_user()
             elif choice == '4':
@@ -221,56 +221,50 @@ class MahjongSystem:
         """开始游戏界面"""
         self.clear_screen()
         print("\n--- 开始新牌局 ---")
-        
-        users = self.user_mgr.get_all_users()
+
+        users = self.user_mgr.get_all_users(with_stats=True)  # 获取带统计的用户信息
         if len(users) < 4:
             print(f"❌ 错误: 至少需要4个已注册用户才能开始游戏！")
             print(f"当前用户数: {len(users)}")
             input("按回车返回...")
             return
-        
+
         selected = []
         for i in range(4):
             while True:
                 self.clear_screen()
                 print(f"\n--- 选择第 {i+1} 个玩家 ---")
-                
-                conn = sqlite3.connect('mahjong.db')
-                c = conn.cursor()
-                c.execute("SELECT id, username FROM users ORDER BY username")
-                all_users = c.fetchall()
-                conn.close()
-                
-                print("序号 | 用户名 | 战绩")
-                print("-" * 40)
-                for idx, (uid, name) in enumerate(all_users, 1):
+
+                # 显示用户列表带统计
+                print("序号 | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分 | 状态")
+                print("-" * 70)
+                for idx, user in enumerate(users, 1):
+                    if len(user) >= 6:  # 有统计信息
+                        uid, name, total_games, total_rounds, total_wins, net_score = user[:6]
+                    else:  # 只有基本信息
+                        uid, name = user
+                        total_games = total_rounds = total_wins = net_score = 0
+
                     selected_ids = [s[0] for s in selected]
-                    selected_flag = " (已选)" if uid in selected_ids else ""
-                    
-                    # 获取用户战绩简要
-                    conn2 = sqlite3.connect('mahjong.db')
-                    c2 = conn2.cursor()
-                    c2.execute("SELECT total_games, total_wins, net_score FROM users WHERE id=?", (uid,))
-                    stats = c2.fetchone()
-                    conn2.close()
-                    
-                    if stats:
-                        games, wins, score = stats
-                        stats_str = f"{games}局 {wins}胜 {score:+d}"
-                    else:
-                        stats_str = "新用户"
-                    
-                    print(f"{idx:2d}   | {name:8} | {stats_str}{selected_flag}")
-                
+                    selected_flag = "✅ 已选" if uid in selected_ids else "     "
+
+                    # 计算胜率
+                    win_rate = (total_wins / total_rounds * 100) if total_rounds > 0 else 0
+
+                    print(f"{idx:2d}   | {name:8} | {total_games:5d} | {total_rounds:5d} | {total_wins:5d} | {net_score:+6d} | {selected_flag}")
+
                 try:
                     idx = int(input(f"\n请选择第 {i+1} 个玩家 (输入序号): "))
-                    if 1 <= idx <= len(all_users):
-                        selected_user = all_users[idx-1]
-                        if selected_user[0] in [s[0] for s in selected]:
+                    if 1 <= idx <= len(users):
+                        selected_user = users[idx-1]
+                        user_id = selected_user[0] if isinstance(selected_user, tuple) else selected_user[0]
+
+                        if user_id in [s[0] for s in selected]:
                             print("该玩家已被选中，请重新选择")
                             input("按回车继续...")
                         else:
-                            selected.append(selected_user)
+                            # 确保保存的是 (id, name) 格式
+                            selected.append((user_id, selected_user[1] if len(selected_user) > 1 else selected_user[1]))
                             break
                     else:
                         print("序号超出范围")
@@ -278,23 +272,23 @@ class MahjongSystem:
                 except ValueError:
                     print("请输入有效数字")
                     input("按回车继续...")
-        
+
         self.clear_screen()
         print("\n--- 确认玩家 ---")
         for i, (_, name) in enumerate(selected, 1):
             print(f"玩家{i}: {name}")
-        
+
         print("\n游戏说明:")
         print("• 每局胡牌或流局都会自动保存为一个小局")
         print("• 结束整场游戏时保存为一个大局")
         print("• 可以随时查看当前小局状态")
-        
+
         confirm = input("\n确认开始游戏？(y/n): ").lower()
         if confirm != 'y':
             print("已取消创建牌局")
             input("按回车返回...")
             return
-        
+
         self.current_game = self.game_mgr.create_game(selected)
         self.game_play_loop()
     

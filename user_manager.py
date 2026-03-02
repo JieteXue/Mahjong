@@ -25,30 +25,18 @@ class UserManager:
         finally:
             conn.close()
     
-    def list_users(self, show_index=False, show_detail=False):
-        """显示所有用户"""
+    def list_users(self, show_stats=False):
+        """显示所有用户
+
+        Args:
+            show_stats: 是否显示详细统计（用于选择玩家时的界面）
+        """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-
-        # 检查是否有新字段
-        c.execute("PRAGMA table_info(users)")
-        columns = [col[1] for col in c.fetchall()]
-
-        if 'total_big_games' in columns:
-            # 新版本，有大局小局统计
-            c.execute('''
-                SELECT id, username, total_games, total_wins, net_score,
-                       total_big_games, total_small_games, total_big_wins
-                FROM users ORDER BY id
-            ''')
-        else:
-            # 旧版本，只有基本统计
-            c.execute('''
-                SELECT id, username, total_games, total_wins, net_score,
-                       0, 0, 0
-                FROM users ORDER BY id
-            ''')
-
+        c.execute('''
+            SELECT id, username, total_games, total_rounds, total_wins, net_score 
+            FROM users ORDER BY id
+        ''')
         users = c.fetchall()
         conn.close()
 
@@ -56,36 +44,37 @@ class UserManager:
             print("暂无用户")
             return users
 
-        print("\n用户列表:")
-        if show_detail:
-            print("ID | 用户名 | 大局数 | 小局数 | 大局胜 | 小局胜 | 净胜分")
-            print("-" * 60)
-            for user in users:
-                total_games = user[2]  # 总小局数
-                big_games = user[5] if len(user) > 5 else 0
-                small_games = user[6] if len(user) > 6 else total_games
-                big_wins = user[7] if len(user) > 7 else 0
-                small_wins = user[3]  # 总胜局数
-                net_score = user[4]
-                print(f"{user[0]:2d} | {user[1]:8} | {big_games:5d} | {small_games:5d} | {big_wins:6d} | {small_wins:6d} | {net_score:+6d}")
-        elif show_index:
-            print("序号 | ID | 用户名 | 小局数 | 胜局数 | 净胜分")
-            print("-" * 50)
+        if show_stats:
+            # 详细统计模式（用于选择玩家界面）
+            print("\n用户列表 (带详细统计):")
+            print("序号 | ID | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分")
+            print("-" * 70)
             for i, user in enumerate(users, 1):
-                print(f"{i:2d}   | {user[0]:2d} | {user[1]:8} | {user[2]:6d} | {user[3]:6d} | {user[4]:+6d}")
+                print(f"{i:2d}   | {user[0]:2d} | {user[1]:8} | {user[2]:6d} | {user[3]:6d} | {user[4]:6d} | {user[5]:+6d}")
         else:
-            print("ID | 用户名 | 小局数 | 胜局数 | 净胜分")
-            print("-" * 40)
+            # 简洁模式
+            print("\n用户列表:")
+            print("ID | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分")
+            print("-" * 50)
             for user in users:
-                print(f"{user[0]:2d} | {user[1]:8} | {user[2]:6d}局 | {user[3]:6d}胜 | {user[4]:+6d}分")
+                print(f"{user[0]:2d} | {user[1]:8} | {user[2]:6d}局 | {user[3]:6d}局 | {user[4]:6d}胜 | {user[5]:+6d}分")
 
         return users
-    
-    def get_all_users(self):
-        """获取所有用户列表（用于选择）"""
+
+    def get_all_users(self, with_stats=False):
+        """获取所有用户列表
+
+        Args:
+            with_stats: 是否包含统计信息
+        """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("SELECT id, username FROM users ORDER BY username")
+
+        if with_stats:
+            c.execute("SELECT id, username, total_games, total_rounds, total_wins, net_score FROM users ORDER BY username")
+        else:
+            c.execute("SELECT id, username FROM users ORDER BY username")
+
         users = c.fetchall()
         conn.close()
         return users
