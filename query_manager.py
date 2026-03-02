@@ -607,3 +607,276 @@ class QueryManager:
             print("暂无白板杠记录")
         
         conn.close()
+           
+    def total_score_stats(self):
+        """查看所有用户总积分排行榜"""
+        print("\n" + "=" * 60)
+        print("💰 总积分排行榜")
+        print("=" * 60)
+
+        season_id, season_name = self.get_season_filter()
+
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        if season_id:
+            # 按赛季统计
+            c.execute('''
+                SELECT u.id, u.username,
+                       COALESCE(SUM(
+                           CASE 
+                               WHEN g.player1_id = u.id THEN g.final_score1 - 1000
+                               WHEN g.player2_id = u.id THEN g.final_score2 - 1000
+                               WHEN g.player3_id = u.id THEN g.final_score3 - 1000
+                               WHEN g.player4_id = u.id THEN g.final_score4 - 1000
+                               ELSE 0
+                           END
+                       ), 0) as game_score,
+                       u.net_score - COALESCE(SUM(
+                           CASE 
+                               WHEN g.player1_id = u.id THEN g.final_score1 - 1000
+                               WHEN g.player2_id = u.id THEN g.final_score2 - 1000
+                               WHEN g.player3_id = u.id THEN g.final_score3 - 1000
+                               WHEN g.player4_id = u.id THEN g.final_score4 - 1000
+                               ELSE 0
+                           END
+                       ), 0) as manual_adjust,
+                       u.net_score as total_score,
+                       COUNT(DISTINCT g.id) as games_played,
+                       COUNT(r.id) as rounds_played,
+                       COUNT(CASE WHEN r.winner_id = u.id THEN 1 END) as wins
+                FROM users u
+                LEFT JOIN games g ON (g.player1_id = u.id OR g.player2_id = u.id OR 
+                                      g.player3_id = u.id OR g.player4_id = u.id)
+                                  AND g.season_id = ? AND g.is_finished = 1
+                LEFT JOIN rounds r ON r.game_id = g.id
+                GROUP BY u.id
+                ORDER BY total_score DESC
+            ''', (season_id,))
+        else:
+            # 全局统计
+            c.execute('''
+                SELECT u.id, u.username,
+                       COALESCE((
+                           SELECT COALESCE(SUM(
+                               CASE 
+                                   WHEN g.player1_id = u.id THEN g.final_score1 - 1000
+                                   WHEN g.player2_id = u.id THEN g.final_score2 - 1000
+                                   WHEN g.player3_id = u.id THEN g.final_score3 - 1000
+                                   WHEN g.player4_id = u.id THEN g.final_score4 - 1000
+                                   ELSE 0
+                               END
+                           ), 0)
+                           FROM games g
+                           WHERE (g.player1_id = u.id OR g.player2_id = u.id OR 
+                                  g.player3_id = u.id OR g.player4_id = u.id)
+                           AND g.is_finished = 1
+                       ), 0) as game_score,
+                       u.net_score - COALESCE((
+                           SELECT COALESCE(SUM(
+                               CASE 
+                                   WHEN g2.player1_id = u.id THEN g2.final_score1 - 1000
+                                   WHEN g2.player2_id = u.id THEN g2.final_score2 - 1000
+                                   WHEN g2.player3_id = u.id THEN g2.final_score3 - 1000
+                                   WHEN g2.player4_id = u.id THEN g2.final_score4 - 1000
+                                   ELSE 0
+                               END
+                           ), 0)
+                           FROM games g2
+                           WHERE (g2.player1_id = u.id OR g2.player2_id = u.id OR 
+                                  g2.player3_id = u.id OR g2.player4_id = u.id)
+                           AND g2.is_finished = 1
+                       ), 0) as manual_adjust,
+                       u.net_score as total_score,
+                       COUNT(DISTINCT g3.id) as games_played,
+                       COUNT(r.id) as rounds_played,
+                       COUNT(CASE WHEN r.winner_id = u.id THEN 1 END) as wins
+                FROM users u
+                LEFT JOIN games g3 ON (g3.player1_id = u.id OR g3.player2_id = u.id OR 
+                                       g3.player3_id = u.id OR g3.player4_id = u.id)
+                                   AND g3.is_finished = 1
+                LEFT JOIN rounds r ON r.game_id = g3.id
+                GROUP BY u.id
+                ORDER BY total_score DESC
+            ''')
+
+        results = c.fetchall()
+
+        if not results:
+            print("暂无用户数据")
+            conn.close()
+            return
+
+        print(f"\n{'排名':^4} | {'用户名':^10} | {'牌局得分':^10} | {'手动调整':^10} | {'总积分':^10} | {'大局数':^6} | {'小局数':^6} | {'胜局数':^6}")
+        print("-" * 85)
+
+        for i, row in enumerate(results, 1):
+            if season_id:
+                uid, name, game_score, manual_adjust, total_score, games, rounds, wins = row
+            else:
+                uid, name, game_score, manual_adjust, total_score, games, rounds, wins = row
+
+            # 确保所有值都不是None，如果是None则替换为0
+            game_score = game_score if game_score is not None else 0
+            manual_adjust = manual_adjust if manual_adjust is not None else 0
+            total_score = total_score if total_score is not None else 0
+            games = games if games is not None else 0
+            rounds = rounds if rounds is not None else 0
+            wins = wins if wins is not None else 0
+
+            # 计算胜率
+            win_rate = (wins / rounds * 100) if rounds > 0 else 0
+
+            # 修复格式化输出 - 使用正确的格式说明符
+            # {:10d} 是整数右对齐10位，{:10} 是字符串左对齐10位
+            print(f"{i:4d} | {name:10} | {game_score:10d} | {manual_adjust:10d} | {total_score:10d} | {games:6d} | {rounds:6d} | {wins:6d} ({win_rate:.1f}%)")
+
+        # 显示总计
+        print("-" * 85)
+
+        # 计算总计时也要处理None值
+        total_players = len(results)
+        total_game_score = sum(row[2] if row[2] is not None else 0 for row in results)
+        total_manual = sum(row[3] if row[3] is not None else 0 for row in results)
+        total_all = sum(row[4] if row[4] is not None else 0 for row in results)
+        total_games = sum(row[5] if row[5] is not None else 0 for row in results)
+        total_rounds = sum(row[6] if row[6] is not None else 0 for row in results)
+        total_wins = sum(row[7] if row[7] is not None else 0 for row in results)
+
+        print(f"总计: {total_players}人 | 牌局得分: {total_game_score:+d} | 手动调整: {total_manual:+d} | 总积分: {total_all:+d} | 大局: {total_games} | 小局: {total_rounds} | 胜局: {total_wins}")
+
+        conn.close()
+
+    def user_total_score_detail(self):
+        """查看单个用户的总积分明细"""
+        print("\n" + "=" * 60)
+        print("📊 用户总积分明细")
+        print("=" * 60)
+
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+
+        # 列出所有用户
+        c.execute("SELECT id, username FROM users ORDER BY username")
+        users = c.fetchall()
+
+        if not users:
+            print("暂无用户")
+            conn.close()
+            return
+
+        print("\n用户列表:")
+        for user in users:
+            print(f"{user[0]}. {user[1]}")
+
+        try:
+            uid = int(input("\n请输入用户ID: "))
+        except ValueError:
+            print("无效输入")
+            conn.close()
+            return
+
+        # 获取用户基本信息
+        c.execute('''
+            SELECT username, created_at, net_score
+            FROM users WHERE id=?
+        ''', (uid,))
+        user = c.fetchone()
+
+        if not user:
+            print("用户不存在")
+            conn.close()
+            return
+
+        username, created_at, total_score = user
+        total_score = total_score if total_score is not None else 0
+
+        # 计算牌局净胜分
+        c.execute('''
+            SELECT COALESCE(SUM(
+                CASE 
+                    WHEN g.player1_id = ? THEN g.final_score1 - 1000
+                    WHEN g.player2_id = ? THEN g.final_score2 - 1000
+                    WHEN g.player3_id = ? THEN g.final_score3 - 1000
+                    WHEN g.player4_id = ? THEN g.final_score4 - 1000
+                    ELSE 0
+                END
+            ), 0) as game_score
+            FROM games g
+            WHERE (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
+            AND g.is_finished = 1
+        ''', (uid, uid, uid, uid, uid, uid, uid, uid))
+
+        game_score = c.fetchone()[0]
+        game_score = game_score if game_score is not None else 0
+
+        # 手动调整积分 = 总积分 - 牌局得分
+        manual_score = total_score - game_score
+
+        print(f"\n=== {username} 的积分明细 ===")
+        print(f"注册时间: {created_at}")
+        print(f"📊 牌局净胜分: {game_score:+d}")
+        print(f"✏️  手动调整分: {manual_score:+d}")
+        print(f"{'='*40}")
+        print(f"💰 总积分: {total_score:+d}")
+
+        # 显示各大局的得分明细
+        print(f"\n📋 各大局得分明细:")
+        c.execute('''
+            SELECT g.id, g.created_at, g.total_rounds,
+                   g.final_score1, g.final_score2, g.final_score3, g.final_score4,
+                   u1.username, u2.username, u3.username, u4.username
+            FROM games g
+            JOIN users u1 ON g.player1_id = u1.id
+            JOIN users u2 ON g.player2_id = u2.id
+            JOIN users u3 ON g.player3_id = u3.id
+            JOIN users u4 ON g.player4_id = u4.id
+            WHERE (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
+            AND g.is_finished = 1
+            ORDER BY g.created_at DESC
+        ''', (uid, uid, uid, uid))
+
+        games = c.fetchall()
+
+        if games:
+            for game in games:
+                gid, date, rounds, s1, s2, s3, s4, p1, p2, p3, p4 = game
+
+                # 确保分数值不为None
+                s1 = s1 if s1 is not None else 1000
+                s2 = s2 if s2 is not None else 1000
+                s3 = s3 if s3 is not None else 1000
+                s4 = s4 if s4 is not None else 1000
+                rounds = rounds if rounds is not None else 0
+
+                # 找出该用户的得分
+                user_score = None
+                if p1 == username:
+                    user_score = s1 - 1000
+                elif p2 == username:
+                    user_score = s2 - 1000
+                elif p3 == username:
+                    user_score = s3 - 1000
+                elif p4 == username:
+                    user_score = s4 - 1000
+
+                print(f"\n  大局 #{gid} [{date[:10]}] ({rounds}小局)")
+                print(f"    {p1}: {s1}  {p2}: {s2}  {p3}: {s3}  {p4}: {s4}")
+                print(f"    该局得分: {user_score:+d}")
+        else:
+            print("  暂无大局记录")
+
+        # 显示手动调整记录
+        try:
+            with open('score_adjustments.log', 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            user_adjustments = [line for line in lines if username in line]
+            if user_adjustments:
+                print(f"\n✏️  手动调整记录:")
+                for line in user_adjustments[-5:]:  # 显示最近5条
+                    print(f"  {line.strip()}")
+        except FileNotFoundError:
+            pass
+        
+        conn.close()
