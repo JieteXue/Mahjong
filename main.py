@@ -1,4 +1,4 @@
-# main.py
+# main.py (更新版)
 import os
 import sys
 import sqlite3
@@ -7,7 +7,6 @@ from user_manager import UserManager
 from season_manager import SeasonManager
 from game_manager import GameManager
 from query_manager import QueryManager
-from big_game_manager import BigGameManager
 
 class MahjongSystem:
     def __init__(self):
@@ -15,11 +14,8 @@ class MahjongSystem:
         self.user_mgr = UserManager()
         self.season_mgr = SeasonManager()
         self.game_mgr = GameManager()
-        self.big_game_mgr = BigGameManager()
         self.query_mgr = QueryManager()
         self.current_game = None
-        self.current_big_game = None
-        self.current_round = 1
     
     def clear_screen(self):
         """清屏"""
@@ -84,7 +80,7 @@ class MahjongSystem:
             if choice == '1':
                 self.user_mgr.register()
             elif choice == '2':
-                self.user_mgr.list_users()
+                self.user_mgr.list_users(show_stats=True)  # 修改这里，显示详细统计
             elif choice == '3':
                 self.user_mgr.update_user()
             elif choice == '4':
@@ -104,23 +100,26 @@ class MahjongSystem:
             print("\n--- 数据查询 ---")
             print("1. 查看用户战绩")
             print("2. 全局统计")
-            print("3. 最近牌局记录")
-            print("4. 查看调整记录")
-            print("5. 查看大局统计")
+            print("3. 最近大局记录")
+            print("4. 最近小局记录")      # 新增
+            print("5. 查看调整记录")
+            print("6. 白板杠统计")         # 新增
             print("0. 返回主菜单")
-
+            
             choice = input("请选择: ")
-
+            
             if choice == '1':
                 self.query_mgr.user_stats()
             elif choice == '2':
                 self.query_mgr.global_stats()
             elif choice == '3':
-                self.query_mgr.recent_games()
+                self.query_mgr.recent_games()      # 大局
             elif choice == '4':
-                self.view_adjustment_logs()
+                self.query_mgr.recent_rounds()     # 小局
             elif choice == '5':
-                self.query_mgr.big_game_stats()
+                self.view_adjustment_logs()
+            elif choice == '6':
+                self.query_mgr.baiban_stats()      # 白板杠统计
             elif choice == '0':
                 break
             input("\n按回车继续...")
@@ -159,9 +158,10 @@ class MahjongSystem:
             print("=" * 50)
             print("1. 备份数据库")
             print("2. 清空所有数据")
-            print("3. 只清空牌局记录")
-            print("4. 只清空操作记录")
-            print("5. 重置用户积分")
+            print("3. 只清空大局记录")      # 修改
+            print("4. 只清空小局记录")      # 新增
+            print("5. 只清空操作记录")
+            print("6. 重置用户积分")
             print("0. 返回主菜单")
             print("=" * 50)
             
@@ -172,47 +172,62 @@ class MahjongSystem:
             elif choice == '2':
                 self.clear_all_data()
             elif choice == '3':
-                self.clear_games_only()
+                self.clear_games_only()      # 清空大局
             elif choice == '4':
-                self.clear_actions_only()
+                self.clear_rounds_only()     # 清空小局
             elif choice == '5':
+                self.clear_actions_only()
+            elif choice == '6':
                 self.reset_user_scores()
             elif choice == '0':
                 break
             input("\n按回车继续...")
     
     def game_menu(self):
-        """开始游戏界面 - 支持大局"""
+        """开始游戏界面"""
         self.clear_screen()
         print("\n--- 开始新牌局 ---")
-
+        
         users = self.user_mgr.get_all_users()
         if len(users) < 4:
             print(f"❌ 错误: 至少需要4个已注册用户才能开始游戏！")
             print(f"当前用户数: {len(users)}")
             input("按回车返回...")
             return
-
-        # 选择4个玩家
+        
         selected = []
         for i in range(4):
             while True:
                 self.clear_screen()
                 print(f"\n--- 选择第 {i+1} 个玩家 ---")
-
+                
                 conn = sqlite3.connect('mahjong.db')
                 c = conn.cursor()
                 c.execute("SELECT id, username FROM users ORDER BY username")
                 all_users = c.fetchall()
                 conn.close()
-
-                print("序号 | 用户名")
-                print("-" * 20)
+                
+                print("序号 | 用户名 | 战绩")
+                print("-" * 40)
                 for idx, (uid, name) in enumerate(all_users, 1):
                     selected_ids = [s[0] for s in selected]
                     selected_flag = " (已选)" if uid in selected_ids else ""
-                    print(f"{idx:2d}   | {name}{selected_flag}")
-
+                    
+                    # 获取用户战绩简要
+                    conn2 = sqlite3.connect('mahjong.db')
+                    c2 = conn2.cursor()
+                    c2.execute("SELECT total_games, total_wins, net_score FROM users WHERE id=?", (uid,))
+                    stats = c2.fetchone()
+                    conn2.close()
+                    
+                    if stats:
+                        games, wins, score = stats
+                        stats_str = f"{games}局 {wins}胜 {score:+d}"
+                    else:
+                        stats_str = "新用户"
+                    
+                    print(f"{idx:2d}   | {name:8} | {stats_str}{selected_flag}")
+                
                 try:
                     idx = int(input(f"\n请选择第 {i+1} 个玩家 (输入序号): "))
                     if 1 <= idx <= len(all_users):
@@ -229,180 +244,170 @@ class MahjongSystem:
                 except ValueError:
                     print("请输入有效数字")
                     input("按回车继续...")
-
+        
         self.clear_screen()
         print("\n--- 确认玩家 ---")
         for i, (_, name) in enumerate(selected, 1):
             print(f"玩家{i}: {name}")
-
-        # 询问是否开始新大局
-        print("\n1. 开始新大局")
-        print("2. 继续现有大局")
-        print("3. 单局模式（不关联大局）")
-
-        mode = input("请选择(1-3): ").strip()
-
-        if mode == '1':
-            # 创建新大局
-            active_season = self.season_mgr.get_active_season()
-            season_id = active_season[0] if active_season else None
-            self.current_big_game = self.big_game_mgr.create_big_game(selected, season_id)
-            self.current_round = 1
-            print(f"开始新大局 #{self.current_big_game.id}")
-
-        elif mode == '2':
-            # 继续现有大局 - 这里简化处理，实际应该让用户选择
-            print("功能开发中，使用单局模式")
-            self.current_big_game = None
-            self.current_round = 1
-
-        else:
-            # 单局模式
-            self.current_big_game = None
-            self.current_round = 1
-
+        
+        print("\n游戏说明:")
+        print("• 每局胡牌或流局都会自动保存为一个小局")
+        print("• 结束整场游戏时保存为一个大局")
+        print("• 可以随时查看当前小局状态")
+        
         confirm = input("\n确认开始游戏？(y/n): ").lower()
         if confirm != 'y':
             print("已取消创建牌局")
             input("按回车返回...")
             return
-
-        # 创建第一小局
-        self.current_game = self.game_mgr.create_game(
-            selected, 
-            big_game=self.current_big_game,
-            round_number=self.current_round
-        )
-
-        # 如果是在大局中，关联小局到大局
-        if self.current_big_game:
-            self.big_game_mgr.update_small_game_big_game(
-                self.current_game.id,
-                self.current_big_game.id,
-                self.current_round
-            )
-            self.current_big_game.add_small_game(self.current_game.id)
-
+        
+        self.current_game = self.game_mgr.create_game(selected)
         self.game_play_loop()
     
     def game_play_loop(self):
-        """游戏进行中的交互界面 - 支持连续小局"""
-        while True:
-            while not self.current_game.is_finished:
-                self.clear_screen()
+        """游戏进行中的交互界面"""
+        while not self.current_game.is_finished:
+            self.clear_screen()
+            print("\n" + "=" * 50)
+            print(f"          大局 #{self.current_game.id}")
+            print("=" * 50)
+            
+            # 显示当前状态
+            self.current_game.show_status()
+            
+            # 显示本局信息
+            if self.current_game.current_round:
+                print(f"\n当前小局: 第 {self.current_game.current_round.round_number} 局")
+                if self.current_game.current_round.baiban_records:
+                    print(f"本局已杠白板: {len(self.current_game.current_round.baiban_records)} 次")
+            
+            print("\n操作菜单:")
+            print("1. 🀄️ 白板杠")
+            print("2. 🏆 胡牌结算")
+            print("3. 🔄 流局")
+            print("4. 📊 显示当前分数")
+            print("5. 🔧 紧急调分")
+            print("6. 📝 查看本小局记录")  # 新增
+            print("0. 🚪 结束整场游戏")
 
-                # 显示大局信息
-                if self.current_big_game:
-                    self.current_big_game.show_status()
-                    print(f"当前小局: 第 {self.current_round} 局")
-                    print("-" * 40)
+            choice = input("请选择: ")
 
-                print("\n=== 当前小局 ===")
+            if choice == '1':
+                self.current_game.baiban_input()
+                input("按回车继续...")
+            elif choice == '2':
+                self.current_game.hupai_input()
+                # 胡牌后不自动按回车，因为里面已经有确认流程
+            elif choice == '3':
+                self.current_game.liuju()
+                # 流局后不自动按回车
+            elif choice == '4':
                 self.current_game.show_status()
-                print("\n操作菜单:")
-                print("1. 白板杠")
-                print("2. 胡牌结算")
-                print("3. 流局")
-                print("4. 显示当前分数")
-                print("5. 🔧 紧急调分")
-                print("0. 结束牌局")
-
-                choice = input("请选择: ")
-
-                if choice == '1':
-                    self.current_game.baiban_input()
-                    input("按回车继续...")
-                elif choice == '2':
-                    self.current_game.hupai_input()
-                elif choice == '3':
-                    self.current_game.liuju()
-                    break
-                elif choice == '4':
-                    self.current_game.show_status()
-                    input("按回车继续...")
-                elif choice == '5':
-                    self.current_game.emergency_adjust()
-                    input("按回车继续...")
-                elif choice == '0':
-                    self.current_game.end_game()
-                    break
-                
-            # 小局结束，更新统计
-            if self.current_game:
-                print("\n" + "=" * 50)
-                print(f"第 {self.current_round} 小局结束")
-                print("=" * 50)
-
-                # 显示最终分数
-                print("本局最终分数:")
-                for i, (pid, name) in enumerate(self.current_game.players):
-                    print(f"  {name}: {self.current_game.scores[i]}")
-
-                # 保存小局数据
-                self.current_game.end_game()
-
-                # 更新大局分数
-                if self.current_big_game:
-                    self.current_big_game.update_scores(self.current_game.scores)
-
-                # 更新用户统计（小局结束，不是大局结束）
-                self.game_mgr.update_user_stats(self.current_game, is_big_game_end=False)
-
-                # 关闭小局连接
-                self.current_game.close_connection()
-
-                # 询问是否继续下一小局
-                if self.current_big_game:
-                    print(f"\n大局 #{self.current_big_game.id} 当前分数:")
-                    for i, (pid, name) in enumerate(self.current_big_game.players):
-                        change = self.current_big_game.current_scores[i] - self.current_big_game.start_scores[i]
-                        print(f"  {name}: {self.current_big_game.current_scores[i]} 分 ({change:+d})")
-
-                    cont = input("\n是否继续下一小局？(y/n, 输入'end'结束大局): ").lower()
-
-                    if cont == 'end':
-                        # 结束大局
-                        self.current_big_game.end_big_game()
-                        # 大局结束，更新大局统计
-                        self.game_mgr.update_user_stats(self.current_game, is_big_game_end=True)
-                        break
-                    elif cont == 'y':
-                        # 继续下一小局
-                        self.current_round += 1
-
-                        # 庄家轮换：上一局的赢家是下一局的庄家
-                        # 这里简化处理，实际应该从游戏状态获取
-                        next_dealer = self.current_game.dealer_id
-
-                        # 创建新小局，使用当前大局分数作为初始分数
-                        self.current_game = self.game_mgr.create_game(
-                            self.current_big_game.players,
-                            big_game=self.current_big_game,
-                            round_number=self.current_round
-                        )
-
-                        # 关联到大局
-                        self.big_game_mgr.update_small_game_big_game(
-                            self.current_game.id,
-                            self.current_big_game.id,
-                            self.current_round
-                        )
-                        self.current_big_game.add_small_game(self.current_game.id)
-
-                        # 继续循环
-                        continue
-                    else:
-                        # 不继续，结束大局
-                        self.current_big_game.end_big_game()
-                        break
-                else:
-                    # 单局模式，直接结束
-                    break
-                
-            # 退出循环
-            break
+                input("按回车继续...")
+            elif choice == '5':
+                self.current_game.emergency_adjust()
+                input("按回车继续...")
+            elif choice == '6':
+                self.show_current_round_detail()
+                input("按回车继续...")
+            elif choice == '0':
+                self.confirm_end_game()
+                break
+            
+        # 游戏结束后的处理
+        if self.current_game:
+            self.finish_game()
+    
+    def show_current_round_detail(self):
+        """显示当前小局详情"""
+        if not self.current_game.current_round:
+            print("还没有开始小局")
+            return
         
-        print("\n✅ 牌局全部结束！")
+        round_data = self.current_game.current_round
+        print(f"\n=== 第 {round_data.round_number} 小局详情 ===")
+        print(f"庄家: {self.current_game.players[round_data.dealer_idx][1]}")
+        print(f"连庄: {round_data.lianzhuang}")
+        print(f"开局分数: {round_data.initial_scores}")
+        
+        if round_data.baiban_records:
+            print("\n本局白板杠:")
+            for player_idx, count in round_data.baiban_records:
+                player_name = self.current_game.players[player_idx][1]
+                print(f"  {player_name}: 杠 {count} 张")
+        else:
+            print("\n本局暂无白板杠")
+    
+    def confirm_end_game(self):
+        """确认结束游戏"""
+        print("\n" + "=" * 50)
+        print("⚠️  确认结束整场游戏")
+        print("=" * 50)
+        
+        # 显示当前大局统计
+        print(f"大局 #{self.current_game.id}")
+        print(f"已进行小局数: {len(self.current_game.rounds)}")
+        if self.current_game.current_round and self.current_game.current_round not in self.current_game.rounds:
+            print(f"当前未完成小局: 第 {self.current_game.current_round.round_number} 局")
+        
+        print("\n当前分数:")
+        for i, (pid, name) in enumerate(self.current_game.players):
+            print(f"  {name}: {self.current_game.scores[i]} 分")
+        
+        confirm = input("\n确认结束整场游戏？(y/n): ").lower()
+        if confirm == 'y':
+            # 如果有未完成的小局，先结束它
+            if self.current_game.current_round and self.current_game.current_round not in self.current_game.rounds:
+                print("正在保存当前小局...")
+                self.current_game.current_round.finish()
+                self.current_game.rounds.append(self.current_game.current_round)
+                self.current_game._save_round_to_db(
+                    self.current_game.current_round, 
+                    self.current_game.current_round.initial_scores
+                )
+            
+            self.current_game.is_finished = True
+        else:
+            print("继续游戏")
+    
+    def finish_game(self):
+        """游戏结束，更新统计"""
+        print("\n" + "=" * 50)
+        print("牌局结束，正在更新统计数据...")
+        print("=" * 50)
+
+        # 显示最终统计
+        print(f"\n大局 #{self.current_game.id} 统计:")
+        print(f"总小局数: {len(self.current_game.rounds)}")
+        
+        # 显示每局结果
+        if self.current_game.rounds:
+            print("\n小局结果:")
+            for i, round_data in enumerate(self.current_game.rounds, 1):
+                if round_data.winner_id:
+                    winner_name = next(name for pid, name in self.current_game.players if pid == round_data.winner_id)
+                    print(f"  第{i}局: {winner_name} 胡牌 {round_data.tai}台")
+                else:
+                    print(f"  第{i}局: 流局")
+        
+        # 显示最终分数
+        print("\n最终分数:")
+        for i, (pid, name) in enumerate(self.current_game.players):
+            change = self.current_game.scores[i] - 1000
+            print(f"  {name}: {self.current_game.scores[i]} 分 ({change:+d})")
+
+        # 先结束大局（保存分数到数据库）
+        self.current_game.end_game()
+
+        # 更新用户统计
+        self.game_mgr.update_user_stats(self.current_game)
+
+        # 关闭连接
+        self.current_game.close_connection()
+
+        print("\n✅ 数据更新完成！")
+        print(f"大局 #{self.current_game.id} 已保存，共 {len(self.current_game.rounds)} 小局")
+
         input("\n按回车返回主菜单...")
     
     def backup_database(self):
@@ -421,7 +426,7 @@ class MahjongSystem:
     
     def clear_all_data(self):
         """清空所有数据"""
-        print("\n⚠️  警告：这将删除所有用户、牌局、赛季数据！")
+        print("\n⚠️  警告：这将删除所有用户、大局、小局、赛季数据！")
         
         self.backup_database()
         
@@ -438,7 +443,9 @@ class MahjongSystem:
         conn = sqlite3.connect('mahjong.db')
         c = conn.cursor()
         
+        c.execute("DELETE FROM baiban_records")
         c.execute("DELETE FROM actions")
+        c.execute("DELETE FROM rounds")
         c.execute("DELETE FROM games")
         c.execute("DELETE FROM seasons")
         c.execute("DELETE FROM users")
@@ -450,8 +457,8 @@ class MahjongSystem:
         print("✅ 所有数据已清空！")
     
     def clear_games_only(self):
-        """只清空牌局记录"""
-        print("\n⚠️  警告：这将删除所有牌局和操作记录！")
+        """只清空大局记录"""
+        print("\n⚠️  警告：这将删除所有大局、小局和操作记录！")
         
         self.backup_database()
         
@@ -463,13 +470,41 @@ class MahjongSystem:
         conn = sqlite3.connect('mahjong.db')
         c = conn.cursor()
         
+        c.execute("DELETE FROM baiban_records")
         c.execute("DELETE FROM actions")
+        c.execute("DELETE FROM rounds")
         c.execute("DELETE FROM games")
         
         conn.commit()
         conn.close()
         
-        print("✅ 牌局记录已清空！")
+        print("✅ 大局记录已清空！")
+    
+    def clear_rounds_only(self):
+        """只清空小局记录"""
+        print("\n⚠️  警告：这将删除所有小局记录和操作记录，但保留大局框架！")
+        
+        self.backup_database()
+        
+        confirm = input("确定清空？(y/n): ").lower()
+        if confirm != 'y':
+            print("操作已取消")
+            return
+        
+        conn = sqlite3.connect('mahjong.db')
+        c = conn.cursor()
+        
+        c.execute("DELETE FROM baiban_records")
+        c.execute("DELETE FROM actions")
+        c.execute("DELETE FROM rounds")
+        
+        # 重置大局中的小局数
+        c.execute("UPDATE games SET total_rounds = 0")
+        
+        conn.commit()
+        conn.close()
+        
+        print("✅ 小局记录已清空！")
     
     def clear_actions_only(self):
         """只清空操作记录"""
@@ -509,6 +544,7 @@ class MahjongSystem:
         c.execute('''
             UPDATE users SET 
                 total_games = 0,
+                total_rounds = 0,
                 total_wins = 0,
                 net_score = 0
         ''')

@@ -1,31 +1,100 @@
-# game_manager.py
+# game_manager.py (更新版)
 import sqlite3
 import random
 import json
 from datetime import datetime
 
+class Round:
+    """小局类"""
+    def __init__(self, game, round_number, dealer_id, dealer_idx, lianzhuang):
+        self.game = game
+        self.round_number = round_number
+        self.dealer_id = dealer_id
+        self.dealer_idx = dealer_idx
+        self.lianzhuang = lianzhuang
+        self.winner_id = None
+        self.tai = 0
+        self.baiban_records = []  # [(player_idx, count), ...]
+        self.initial_scores = game.scores.copy()
+        
+    def add_baiban(self, player_idx, count):
+        """添加白板杠记录"""
+        self.baiban_records.append((player_idx, count))
+        
+    def finish(self, winner_idx=None, tai=0):
+        """结束小局"""
+        self.winner_id = self.game.players[winner_idx][0] if winner_idx is not None else None
+        self.tai = tai
+        self.final_scores = self.game.scores.copy()
+        
+    def get_score_changes(self):
+        """获取本局分数变化"""
+        return [self.game.scores[i] - self.initial_scores[i] for i in range(4)]
+
+
 class Game:
-    def __init__(self, game_id, players, scores, dealer_id, lianzhuang, bao):
+    def __init__(self, game_id, players, scores, bao):
         self.id = game_id
         self.players = players  # [(id, name), ...]
         self.scores = scores    # [score1, score2, score3, score4]
-        self.dealer_id = dealer_id
-        self.dealer_idx = [p[0] for p in players].index(dealer_id)
-        self.lianzhuang = lianzhuang
         self.bao = bao
         self.is_finished = False
+        
+        # 庄家相关（初始随机选择第一个玩家为庄家）
+        self.dealer_id = players[0][0]
+        self.dealer_idx = 0
+        self.lianzhuang = 0
+        
+        # 小局记录
+        self.rounds = []
+        self.current_round = None
+        self.round_counter = 0
+        
         self.conn = sqlite3.connect('mahjong.db')
+        
+        # 初始化游戏记录中的总小局数
+        self._update_game_total_rounds()
+    
+    def _update_game_total_rounds(self):
+        """更新游戏表中的总小局数"""
+        try:
+            c = self.conn.cursor()
+            c.execute('''
+                UPDATE games SET total_rounds = ? WHERE id = ?
+            ''', (len(self.rounds), self.id))
+            self.conn.commit()
+        except Exception as e:
+            print(f"更新小局数时出错: {e}")
+    
+    def start_new_round(self):
+        """开始新的一局"""
+        self.round_counter += 1
+        self.current_round = Round(
+            game=self,
+            round_number=self.round_counter,
+            dealer_id=self.dealer_id,
+            dealer_idx=self.dealer_idx,
+            lianzhuang=self.lianzhuang
+        )
+        print(f"\n=== 开始第 {self.round_counter} 小局 ===")
+        print(f"庄家: {self.players[self.dealer_idx][1]} (连庄 {self.lianzhuang})")
+        return self.current_round
     
     def show_status(self):
         """显示当前牌局状态"""
+        print(f"当前小局: {self.round_counter + 1 if self.current_round else 1}")
         print(f"庄家: {self.players[self.dealer_idx][1]} (连庄 {self.lianzhuang})")
+        print(f"财神: {self.bao}")
         print("\n当前分数:")
         for i, (pid, name) in enumerate(self.players):
             print(f"  {name}: {self.scores[i]} 分")
     
     def baiban_input(self):
-        """处理白板杠输入 - 支持多张白板"""
-        print("\n谁杠？")
+        """处理白板杠输入"""
+        if not self.current_round:
+            self.start_new_round()
+            
+        print("\n谁杠白板？")
         for i, (_, name) in enumerate(self.players):
             print(f"{i+1}. {name}")
         
@@ -35,7 +104,6 @@ class Game:
                 print("无效选择")
                 return
             
-            # 询问杠几张白板
             print("\n杠几张？")
             print("1. 杠1张")
             print("2. 杠2张")
@@ -47,15 +115,13 @@ class Game:
                 print("无效选择")
                 return
             
-            self.baiban(choice, gang_count)
+            self._baiban(choice, gang_count)
             
         except ValueError:
             print("请输入数字")
-        except Exception as e:
-            print(f"发生错误: {e}")
     
-    def baiban(self, player_idx, count=1):
-        """执行白板杠结算 - 支持多张白板"""
+    def _baiban(self, player_idx, count):
+        """执行白板杠结算"""
         changes = [0, 0, 0, 0]
         changes[player_idx] = 3 * count
         for i in range(4):
@@ -66,6 +132,10 @@ class Game:
         for i in range(4):
             self.scores[i] += changes[i]
         
+        # 记录到当前小局
+        if self.current_round:
+            self.current_round.add_baiban(player_idx, count)
+        
         # 记录操作
         self.record_action('baiban', self.players[player_idx][0], changes, {'count': count})
         
@@ -74,13 +144,12 @@ class Game:
         for i in range(4):
             if i != player_idx:
                 print(f"   {self.players[i][1]}: -{count} 分")
-        
-        print("\n更新后分数:")
-        for i, (pid, name) in enumerate(self.players):
-            print(f"  {name}: {self.scores[i]} 分")
     
     def hupai_input(self):
         """处理胡牌输入"""
+        if not self.current_round:
+            self.start_new_round()
+            
         print("\n谁胡牌了？")
         for i, (_, name) in enumerate(self.players):
             print(f"{i+1}. {name}")
@@ -92,14 +161,17 @@ class Game:
                 return
             
             tai = int(input("请输入总台数: "))
-            self.hupai(winner, tai)
+            self._hupai(winner, tai)
         except ValueError:
             print("请输入有效数字")
     
-    def hupai(self, winner_idx, tai):
+    def _hupai(self, winner_idx, tai):
         """执行胡牌结算"""
         changes = [0, 0, 0, 0]
         winner_id = self.players[winner_idx][0]
+        
+        # 记录本局开始时的分数
+        round_start_scores = self.scores.copy()
         
         if winner_id == self.dealer_id:
             # 庄家胡
@@ -109,9 +181,11 @@ class Game:
                 if i != winner_idx:
                     changes[i] = -base
             
-            self.lianzhuang += 1
             print(f"\n✅ 庄家 {self.players[winner_idx][1]} 胡牌 {tai}台")
             print(f"每人付 {base}条")
+            
+            # 庄家连庄
+            self.lianzhuang += 1
         else:
             # 闲家胡
             zhuang_pay = tai + 2 + self.lianzhuang * 2
@@ -131,7 +205,7 @@ class Game:
             print(f"庄家 {self.players[self.dealer_idx][1]} 付 {zhuang_pay}条")
             print(f"其他闲家付 {xian_pay}条")
             
-            # 更新庄家
+            # 换庄
             self.dealer_id = winner_id
             self.dealer_idx = winner_idx
             self.lianzhuang = 0
@@ -140,23 +214,105 @@ class Game:
         for i in range(4):
             self.scores[i] += changes[i]
         
+        # 结束当前小局
+        self.current_round.finish(winner_idx, tai)
+        self.rounds.append(self.current_round)
+        
+        # 保存小局到数据库
+        self._save_round_to_db(self.current_round, round_start_scores)
+        
         # 显示更新后的分数
         print("\n更新后分数:")
         for i, (pid, name) in enumerate(self.players):
             print(f"  {name}: {self.scores[i]} 分")
         
-        self.record_action('hupai', winner_id, changes, {'tai': tai})
+        self.record_action('hupai', winner_id, changes, {'tai': tai, 'round': self.round_counter})
         
-        # 询问是否继续
+        # 询问是否继续下一局
         cont = input("\n是否继续下一局？(y/n): ").lower()
-        if cont != 'y':
-            self.is_finished = True
+        if cont == 'y':
+            self.start_new_round()
+        else:
+            # 不继续下一局，询问是否结束整场游戏
+            end_game = input("是否结束整场游戏？(y/n): ").lower()
+            if end_game == 'y':
+                self.is_finished = True
+            else:
+                # 如果不结束游戏，可以继续新的一局
+                self.start_new_round()
+    
+    def _save_round_to_db(self, round_obj, start_scores):
+        """保存小局到数据库"""
+        try:
+            c = self.conn.cursor()
+
+            # 计算分数变化
+            changes = round_obj.get_score_changes()
+
+            # 插入小局记录
+            c.execute('''
+                INSERT INTO rounds (
+                    game_id, round_number, dealer_id, winner_id, tai, lianzhuang,
+                    score1, score2, score3, score4,
+                    score_change1, score_change2, score_change3, score_change4
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                self.id, round_obj.round_number,
+                round_obj.dealer_id,
+                round_obj.winner_id,
+                round_obj.tai,
+                round_obj.lianzhuang,
+                self.scores[0], self.scores[1], self.scores[2], self.scores[3],
+                changes[0], changes[1], changes[2], changes[3]
+            ))
+
+            round_db_id = c.lastrowid
+
+            # 更新刚插入的actions记录，设置round_id
+            c.execute('''
+                UPDATE actions SET round_id = ?
+                WHERE game_id = ? AND round_id IS NULL
+            ''', (round_db_id, self.id))
+
+            # 保存白板杠记录
+            for player_idx, count in round_obj.baiban_records:
+                c.execute('''
+                    INSERT INTO baiban_records (round_id, player_id, count)
+                    VALUES (?, ?, ?)
+                ''', (round_db_id, self.players[player_idx][0], count))
+
+            self.conn.commit()
+
+            # 更新游戏表中的总小局数
+            self._update_game_total_rounds()
+
+            print(f"✅ 第 {round_obj.round_number} 小局已保存到数据库")
+
+        except Exception as e:
+            print(f"保存小局时出错: {e}")
+            self.conn.rollback()
     
     def liuju(self):
         """流局处理"""
+        if not self.current_round:
+            self.start_new_round()
+        
+        # 记录流局
+        self.current_round.finish(None, 0)
+        self.rounds.append(self.current_round)
+        
+        # 保存流局到数据库
+        self._save_round_to_db(self.current_round, self.scores.copy())
+        
         self.record_action('liuju', None, [0,0,0,0])
         print("流局")
-        self.is_finished = True
+        
+        # 询问是否继续
+        cont = input("\n是否继续下一局？(y/n): ").lower()
+        if cont == 'y':
+            self.start_new_round()
+        else:
+            self.is_finished = True
     
     def emergency_adjust(self):
         """牌局中紧急调分"""
@@ -188,16 +344,31 @@ class Game:
                 
         except ValueError:
             print("请输入有效数字")
-    
+
     def record_action(self, action_type, player_id, changes, detail=None):
         """记录操作到数据库"""
         try:
             c = self.conn.cursor()
+
+            # 获取当前round_id
+            round_id = None
+            if self.current_round:
+                # 需要先获取刚插入的round记录的ID
+                c.execute('''
+                    SELECT id FROM rounds 
+                    WHERE game_id = ? AND round_number = ?
+                    ORDER BY created_at DESC LIMIT 1
+                ''', (self.id, self.current_round.round_number))
+                result = c.fetchone()
+                if result:
+                    round_id = result[0]
+
             c.execute('''
-                INSERT INTO actions (game_id, action_type, player_id, score_changes, tai_detail, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO actions (game_id, round_id, action_type, player_id, score_changes, tai_detail, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 self.id,
+                round_id,
                 action_type,
                 player_id,
                 json.dumps(changes, ensure_ascii=False),
@@ -207,36 +378,48 @@ class Game:
             self.conn.commit()
         except Exception as e:
             print(f"记录操作时出错: {e}")
-    
+
     def end_game(self):
-        """结束牌局 - 只保存数据，不关闭连接"""
+        """结束整场游戏（大局）"""
         self.is_finished = True
+
+        # 如果有未结束的小局，先结束它
+        if self.current_round and self.current_round not in self.rounds:
+            self.current_round.finish()
+            self.rounds.append(self.current_round)
+            self._save_round_to_db(self.current_round, self.current_round.initial_scores)
+
         try:
             c = self.conn.cursor()
 
-            print(f"\n💾 保存牌局 #{self.id} 最终分数:")
-            for i, (pid, name) in enumerate(self.players):
-                print(f"  {name}: {self.scores[i]}")
+            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # 更新游戏状态和分数
-            c.execute("UPDATE games SET is_finished=1 WHERE id=?", (self.id,))
+            print(f"\n💾 保存大局 #{self.id} 最终分数:")
+            for i, (pid, name) in enumerate(self.players):
+                print(f"  {name}: {self.scores[i]} 分")
+            print(f"总小局数: {len(self.rounds)}")
+
+            # 更新游戏状态和分数 - 使用 final_score 列名
             c.execute('''
                 UPDATE games SET 
-                    score1=?, score2=?, score3=?, score4=?, 
-                    dealer_id=?, lianzhuang=? 
+                    is_finished=1,
+                    finished_at=?,
+                    final_score1=?, final_score2=?, final_score3=?, final_score4=?,
+                    total_rounds=?
                 WHERE id=?
             ''', (
+                finished_at,
                 self.scores[0], self.scores[1], self.scores[2], self.scores[3],
-                self.dealer_id, self.lianzhuang, self.id
+                len(self.rounds), self.id
             ))
 
             self.conn.commit()
-            print("✅ 牌局数据已保存到数据库")
+            print("✅ 大局数据已保存到数据库")
 
         except Exception as e:
-            print(f"❌ 结束牌局时出错: {e}")
+            print(f"❌ 结束游戏时出错: {e}")
             self.conn.rollback()
-
+    
     def close_connection(self):
         """关闭数据库连接"""
         try:
@@ -251,7 +434,7 @@ class GameManager:
         self.db_path = 'mahjong.db'
     
     def generate_bao(self):
-        """随机生成财神（内部使用）"""
+        """随机生成财神"""
         suits = ['万', '筒', '条']
         numbers = ['一', '二', '三', '四', '五', '六', '七', '八', '九']
         
@@ -263,97 +446,71 @@ class GameManager:
             return random.choice(honors)
         
         return f"{number}{suit}"
-
-    def create_game(self, selected_users, big_game=None, round_number=1):
-        """创建新游戏，支持大局和小局"""
+    
+    def create_game(self, selected_users):
+        """创建新游戏（大局）"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-
+        
         # 获取当前活跃赛季
         try:
             from season_manager import SeasonManager
             season_mgr = SeasonManager()
             active_season = season_mgr.get_active_season()
             season_id = active_season[0] if active_season else None
+            if active_season:
+                print(f"当前赛季: {active_season[1]}")
         except:
             season_id = None
-
+            print("⚠️ 赛季功能未启用")
+        
         # 随机生成财神
         bao = self.generate_bao()
-
-        dealer_id = selected_users[0][0]
-
-        # 确定大局ID和小局序号
-        big_game_id = big_game.id if big_game else 0
-        round_num = round_number
-
-        # 获取初始分数（如果是大局中的后续小局，使用当前分数）
-        if big_game and round_number > 1:
-            initial_scores = big_game.current_scores
-        else:
-            initial_scores = [1000, 1000, 1000, 1000]
-
-        # 检查games表结构
+        
+        # 检查games表是否有season_id列
         c.execute("PRAGMA table_info(games)")
         columns = [col[1] for col in c.fetchall()]
-
-        if 'big_game_id' in columns and 'round_number' in columns:
+        
+        # 构建插入语句 - 使用正确的列名
+        if 'season_id' in columns:
             c.execute('''
                 INSERT INTO games 
-                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao, season_id,
-                 big_game_id, round_number, score1, score2, score3, score4)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (player1_id, player2_id, player3_id, player4_id, bao, season_id, dealer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             ''', (
                 selected_users[0][0], selected_users[1][0],
                 selected_users[2][0], selected_users[3][0],
-                dealer_id, bao, season_id,
-                big_game_id, round_num,
-                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
-            ))
-        elif 'season_id' in columns:
-            c.execute('''
-                INSERT INTO games 
-                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao, season_id,
-                 score1, score2, score3, score4)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                selected_users[0][0], selected_users[1][0],
-                selected_users[2][0], selected_users[3][0],
-                dealer_id, bao, season_id,
-                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
+                bao, season_id, selected_users[0][0]
             ))
         else:
             c.execute('''
                 INSERT INTO games 
-                (player1_id, player2_id, player3_id, player4_id, dealer_id, bao,
-                 score1, score2, score3, score4)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (player1_id, player2_id, player3_id, player4_id, bao, dealer_id)
+                VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 selected_users[0][0], selected_users[1][0],
                 selected_users[2][0], selected_users[3][0],
-                dealer_id, bao,
-                initial_scores[0], initial_scores[1], initial_scores[2], initial_scores[3]
+                bao, selected_users[0][0]
             ))
-
+        
         game_id = c.lastrowid
         conn.commit()
         conn.close()
-
-        return Game(
+        
+        game = Game(
             game_id=game_id,
             players=selected_users,
-            scores=initial_scores.copy(),
-            dealer_id=dealer_id,
-            lianzhuang=0,
+            scores=[1000, 1000, 1000, 1000],
             bao=bao
         )
+        
+        # 开始第一小局
+        game.start_new_round()
+        
+        return game
     
-    def update_user_stats(self, game, is_big_game_end=False):
-        """游戏结束后更新用户统计
-        Args:
-            game: Game对象
-            is_big_game_end: 是否是大局结束（大局结束时才更新大局统计）
-        """
+    def update_user_stats(self, game):
+        """游戏结束后更新用户统计"""
         print("\n📊 正在更新用户统计...")
         
         conn = None
@@ -361,109 +518,41 @@ class GameManager:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
             
-            # 检查是否有新字段
-            c.execute("PRAGMA table_info(users)")
-            columns = [col[1] for col in c.fetchall()]
-            has_big_game_fields = 'total_big_games' in columns
-            
             # 获取游戏结束时的最终分数
             final_scores = game.scores
             print(f"最终分数: {final_scores}")
             
             for i, (pid, name) in enumerate(game.players):
-                # 查询初始分数（从数据库读取）
-                c.execute('''
-                    SELECT score1, score2, score3, score4 FROM games WHERE id=?
-                ''', (game.id,))
-                initial = c.fetchone()
-                if initial:
-                    initial_score = initial[i]
-                else:
-                    initial_score = 1000
+                # 计算该玩家的净胜分变化
+                score_change = final_scores[i] - 1000
                 
-                # 计算该玩家在本小局的净胜分变化
-                score_change = final_scores[i] - initial_score
-                
-                # 查询该玩家在本局中是否有胡牌操作
+                # 查询该玩家在本局中的胡牌次数
                 c.execute('''
-                    SELECT COUNT(*) FROM actions 
-                    WHERE game_id=? AND action_type='hupai' AND player_id=?
+                    SELECT COUNT(*) FROM rounds 
+                    WHERE game_id=? AND winner_id=?
                 ''', (game.id, pid))
-                has_win = c.fetchone()[0] > 0
+                win_count = c.fetchone()[0]
                 
-                print(f"玩家 {name}: 小局变化 {score_change:+d}, 是否胡牌: {has_win}")
+                print(f"玩家 {name}: 分数变化 {score_change:+d}, 胡牌次数: {win_count}")
                 
-                if has_big_game_fields:
-                    # 有大局小局统计字段
-                    # 更新小局统计
-                    c.execute('''
-                        UPDATE users SET 
-                            total_small_games = total_small_games + 1,
-                            total_wins = total_wins + ?,
-                            net_score = net_score + ?
-                        WHERE id = ?
-                    ''', (1 if has_win else 0, score_change, pid))
-                    
-                    # 如果是大局结束，更新大局统计
-                    if is_big_game_end:
-                        # 计算大局总变化（从大局开始到结束）
-                        c.execute('''
-                            SELECT start_scores FROM big_games 
-                            WHERE id=? AND player1_id=? OR player2_id=? OR player3_id=? OR player4_id=?
-                        ''', (game.big_game_id, pid, pid, pid, pid))
-                        big_game_data = c.fetchone()
-                        
-                        if big_game_data:
-                            start_scores = json.loads(big_game_data[0])
-                            # 找到该玩家的初始大局分数
-                            player_idx = -1
-                            for j, (p, _) in enumerate(game.players):
-                                if p == pid:
-                                    player_idx = j
-                                    break
-                                
-                            if player_idx >= 0:
-                                big_score_change = final_scores[player_idx] - start_scores[player_idx]
-                                
-                                # 查询该玩家在整个大局中是否有胡牌（只要有任何一小局胡牌就算大局胜）
-                                c.execute('''
-                                    SELECT COUNT(*) FROM actions a
-                                    JOIN games g ON a.game_id = g.id
-                                    WHERE g.big_game_id=? AND a.action_type='hupai' AND a.player_id=?
-                                ''', (game.big_game_id, pid))
-                                has_big_win = c.fetchone()[0] > 0
-                                
-                                c.execute('''
-                                    UPDATE users SET 
-                                        total_big_games = total_big_games + 1,
-                                        total_big_wins = total_big_wins + ?
-                                    WHERE id = ?
-                                ''', (1 if has_big_win else 0, pid))
-                else:
-                    # 没有大局字段，使用原来的统计方式
-                    c.execute('''
-                        UPDATE users SET 
-                            total_games = total_games + 1,
-                            total_wins = total_wins + ?,
-                            net_score = net_score + ?
-                        WHERE id = ?
-                    ''', (1 if has_win else 0, score_change, pid))
+                # 更新用户统计
+                c.execute('''
+                    UPDATE users SET 
+                        total_games = total_games + 1,
+                        total_rounds = total_rounds + ?,
+                        total_wins = total_wins + ?,
+                        net_score = net_score + ?
+                    WHERE id = ?
+                ''', (len(game.rounds), win_count, score_change, pid))
             
             conn.commit()
             
             # 验证更新
-            if has_big_game_fields:
-                c.execute("SELECT id, username, total_small_games, total_wins, net_score, total_big_games, total_big_wins FROM users")
-            else:
-                c.execute("SELECT id, username, total_games, total_wins, net_score FROM users")
-            
+            c.execute("SELECT id, username, total_games, total_rounds, total_wins, net_score FROM users")
             updated_users = c.fetchall()
             print("\n✅ 更新后的用户统计:")
             for user in updated_users:
-                if len(user) > 5:
-                    print(f"  {user[1]}: 小局{user[2]}局 {user[3]}胜 净胜分{user[4]:+d} 大局{user[5]}局 {user[6]}胜")
-                else:
-                    print(f"  {user[1]}: {user[2]}局 {user[3]}胜 净胜分{user[4]:+d}")
+                print(f"  {user[1]}: {user[2]}大局 {user[3]}小局 {user[4]}胜 净胜分:{user[5]:+d}")
                 
         except Exception as e:
             print(f"❌ 更新用户统计时出错: {e}")
