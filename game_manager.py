@@ -427,6 +427,98 @@ class Game:
             print("✅ 游戏数据库连接已关闭")
         except Exception as e:
             print(f"关闭连接时出错: {e}")
+    
+    def quick_settlement(self):
+        """快捷结算：先统计各家杠数量，再统一胡牌结算"""
+        if not self.current_round:
+            self.start_new_round()
+        
+        print("\n" + "=" * 50)
+        print("🎯 快捷结算模式")
+        print("=" * 50)
+        print("请依次输入各家白板杠数量")
+        print("（输入0表示没有杠，可以多次输入多张杠）")
+        
+        # 统计各家杠数量
+        gang_counts = [0, 0, 0, 0]
+        
+        for i, (pid, name) in enumerate(self.players):
+            print(f"\n--- {name} 的杠数量 ---")
+            while True:
+                try:
+                    count = input(f"  杠几张白板 (直接回车结束): ").strip()
+                    if count == "":
+                        break
+                    count = int(count)
+                    if count in [1, 2, 3, 4]:
+                        gang_counts[i] += count
+                        print(f"    累计: {gang_counts[i]} 张")
+                    else:
+                        print("    请输入1-4的数字")
+                except ValueError:
+                    print("    请输入有效数字")
+        
+        # 显示杠统计
+        print("\n" + "=" * 50)
+        print("📊 杠统计结果:")
+        total_gang = 0
+        for i, (pid, name) in enumerate(self.players):
+            if gang_counts[i] > 0:
+                print(f"  {name}: {gang_counts[i]} 张")
+                total_gang += gang_counts[i]
+            else:
+                print(f"  {name}: 0 张")
+        
+        if total_gang == 0:
+            print("本局无人杠白板")
+        else:
+            print(f"总计: {total_gang} 张")
+        
+        # 询问是否确认杠统计
+        confirm = input("\n确认杠统计结果？(y/n): ").lower()
+        if confirm != 'y':
+            print("已取消快捷结算")
+            return
+        
+        # 执行杠结算
+        if total_gang > 0:
+            for i, count in enumerate(gang_counts):
+                if count > 0:
+                    self._baiban(i, count)
+        
+        # 询问胡牌情况
+        print("\n" + "=" * 50)
+        print("🏆 胡牌结算")
+        print("=" * 50)
+        
+        # 选择胡牌玩家
+        print("\n谁胡牌了？")
+        for i, (_, name) in enumerate(self.players):
+            print(f"{i+1}. {name}")
+        print("0. 流局")
+        
+        try:
+            winner_choice = input("请选择(0-4): ").strip()
+            if winner_choice == "0":
+                # 流局
+                self.liuju()
+                return
+            
+            winner = int(winner_choice) - 1
+            if not (0 <= winner < 4):
+                print("无效选择")
+                return
+            
+            # 输入台数
+            tai = int(input("请输入总台数: "))
+            
+            # 执行胡牌结算
+            self._hupai(winner, tai)
+            
+        except ValueError:
+            print("请输入有效数字")
+        except Exception as e:
+            print(f"发生错误: {e}")
 
 
 class GameManager:

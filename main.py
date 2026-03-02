@@ -305,23 +305,24 @@ class MahjongSystem:
             print("\n" + "=" * 50)
             print(f"          大局 #{self.current_game.id}")
             print("=" * 50)
-            
+
             # 显示当前状态
             self.current_game.show_status()
-            
+
             # 显示本局信息
             if self.current_game.current_round:
                 print(f"\n当前小局: 第 {self.current_game.current_round.round_number} 局")
                 if self.current_game.current_round.baiban_records:
                     print(f"本局已杠白板: {len(self.current_game.current_round.baiban_records)} 次")
-            
+
             print("\n操作菜单:")
             print("1. 🀄️ 白板杠")
             print("2. 🏆 胡牌结算")
             print("3. 🔄 流局")
             print("4. 📊 显示当前分数")
             print("5. 🔧 紧急调分")
-            print("6. 📝 查看本小局记录")  # 新增
+            print("6. 📝 查看本小局记录")
+            print("7. ⚡ 快捷结算（先统计杠，再胡牌）")  # 新增
             print("0. 🚪 结束整场游戏")
 
             choice = input("请选择: ")
@@ -331,10 +332,8 @@ class MahjongSystem:
                 input("按回车继续...")
             elif choice == '2':
                 self.current_game.hupai_input()
-                # 胡牌后不自动按回车，因为里面已经有确认流程
             elif choice == '3':
                 self.current_game.liuju()
-                # 流局后不自动按回车
             elif choice == '4':
                 self.current_game.show_status()
                 input("按回车继续...")
@@ -344,13 +343,11 @@ class MahjongSystem:
             elif choice == '6':
                 self.show_current_round_detail()
                 input("按回车继续...")
+            elif choice == '7':
+                self.current_game.quick_settlement()
             elif choice == '0':
                 self.confirm_end_game()
                 break
-            
-        # 游戏结束后的处理
-        if self.current_game:
-            self.finish_game()
     
     def show_current_round_detail(self):
         """显示当前小局详情"""
