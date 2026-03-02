@@ -33,32 +33,53 @@ class UserManager:
         """
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute('''
-            SELECT id, username, total_games, total_rounds, total_wins, net_score 
-            FROM users ORDER BY id
-        ''')
-        users = c.fetchall()
-        conn.close()
-
-        if not users:
-            print("暂无用户")
-            return users
 
         if show_stats:
-            # 详细统计模式（用于选择玩家界面）
+            # 详细统计模式（用于选择玩家界面）- 显示总积分
+            c.execute('''
+                SELECT u.id, u.username, u.total_games, u.total_rounds, u.total_wins, u.net_score,
+                       COALESCE((
+                           SELECT SUM(
+                               CASE 
+                                   WHEN g.player1_id = u.id THEN g.final_score1 - 1000
+                                   WHEN g.player2_id = u.id THEN g.final_score2 - 1000
+                                   WHEN g.player3_id = u.id THEN g.final_score3 - 1000
+                                   WHEN g.player4_id = u.id THEN g.final_score4 - 1000
+                                   ELSE 0
+                               END
+                           )
+                           FROM games g
+                           WHERE (g.player1_id = u.id OR g.player2_id = u.id OR 
+                                  g.player3_id = u.id OR g.player4_id = u.id)
+                           AND g.is_finished = 1
+                       ), 0) as game_score
+                FROM users u
+                ORDER BY u.id
+            ''')
+            users = c.fetchall()
+
             print("\n用户列表 (带详细统计):")
-            print("序号 | ID | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分")
-            print("-" * 70)
+            print("序号 | ID | 用户名 | 大局数 | 小局数 | 胜局数 | 牌局得分 | 手动调整 | 总积分")
+            print("-" * 85)
             for i, user in enumerate(users, 1):
-                print(f"{i:2d}   | {user[0]:2d} | {user[1]:8} | {user[2]:6d} | {user[3]:6d} | {user[4]:6d} | {user[5]:+6d}")
+                uid, name, total_games, total_rounds, total_wins, net_score, game_score = user
+                manual_score = net_score - game_score
+                print(f"{i:2d}   | {uid:2d} | {name:8} | {total_games:6d} | {total_rounds:6d} | {total_wins:6d} | {game_score:+8d} | {manual_score:+8d} | {net_score:+8d}")
         else:
             # 简洁模式
-            print("\n用户列表:")
-            print("ID | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分")
-            print("-" * 50)
-            for user in users:
-                print(f"{user[0]:2d} | {user[1]:8} | {user[2]:6d}局 | {user[3]:6d}局 | {user[4]:6d}胜 | {user[5]:+6d}分")
+            c.execute('''
+                SELECT id, username, total_games, total_rounds, total_wins, net_score 
+                FROM users ORDER BY id
+            ''')
+            users = c.fetchall()
 
+            print("\n用户列表:")
+            print("ID | 用户名 | 大局数 | 小局数 | 胜局数 | 总积分")
+            print("-" * 55)
+            for user in users:
+                print(f"{user[0]:2d} | {user[1]:8} | {user[2]:6d}局 | {user[3]:6d}局 | {user[4]:6d}胜 | {user[5]:+8d}")
+
+        conn.close()
         return users
 
     def get_all_users(self, with_stats=False):
