@@ -178,7 +178,7 @@ class SeasonManager:
         # 小局统计
         c.execute('''
             SELECT COUNT(*) FROM rounds r
-            JOIN games g ON r.game_id = g.id
+            LEFT JOIN games g ON r.game_id = g.id
             WHERE g.season_id=?
         ''', (season_id,))
         round_count = c.fetchone()[0]
@@ -191,7 +191,7 @@ class SeasonManager:
         c.execute('''
             SELECT DISTINCT u.id, u.username
             FROM users u
-            JOIN games g ON 
+            LEFT JOIN games g ON 
                 u.id IN (g.player1_id, g.player2_id, g.player3_id, g.player4_id)
             WHERE g.season_id=?
             ORDER BY u.username
@@ -226,7 +226,7 @@ class SeasonManager:
             # 计算胡牌次数
             c.execute('''
                 SELECT COUNT(*) FROM rounds r
-                JOIN games g ON r.game_id = g.id
+                LEFT JOIN games g ON r.game_id = g.id
                 WHERE g.season_id=? AND r.winner_id=?
             ''', (season_id, player_id))
             wins = c.fetchone()[0]
@@ -234,7 +234,7 @@ class SeasonManager:
             # 计算参与小局数
             c.execute('''
                 SELECT COUNT(*) FROM rounds r
-                JOIN games g ON r.game_id = g.id
+                LEFT JOIN games g ON r.game_id = g.id
                 WHERE g.season_id=?
                 AND (g.player1_id=? OR g.player2_id=? OR g.player3_id=? OR g.player4_id=?)
             ''', (season_id, player_id, player_id, player_id, player_id))

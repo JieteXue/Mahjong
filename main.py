@@ -224,38 +224,51 @@ class MahjongSystem:
             input("\n按回车继续...")
     
     def game_menu(self):
-        """开始游戏界面"""
+        """开始新牌局（支持2/3/4人）"""
         self.clear_screen()
         print("\n--- 开始新牌局 ---")
 
-        users = self.user_mgr.get_all_users(with_stats=True)  # 获取带统计的用户信息
-        if len(users) < 4:
-            print(f"❌ 错误: 至少需要4个已注册用户才能开始游戏！")
+        # 1. 选择人数
+        print("请选择游戏人数：")
+        print("1. 2人")
+        print("2. 3人")
+        print("3. 4人")
+        choice = input("请选择 (1-3): ").strip()
+        if choice == '1':
+            num_players = 2
+        elif choice == '2':
+            num_players = 3
+        else:
+            num_players = 4
+
+        # 2. 获取所有用户（带统计）
+        users = self.user_mgr.get_all_users(with_stats=True)
+        if len(users) < num_players:
+            print(f"❌ 错误: 至少需要 {num_players} 个已注册用户才能开始游戏！")
             print(f"当前用户数: {len(users)}")
             input("按回车返回...")
             return
 
-        selected = []
-        for i in range(4):
+        selected = []  # 已选中的玩家列表，元素为 (id, name)
+
+        # 3. 逐个选择玩家
+        for i in range(num_players):
             while True:
                 self.clear_screen()
-                print(f"\n--- 选择第 {i+1} 个玩家 ---")
+                print(f"\n--- 选择第 {i+1} 个玩家 (共需 {num_players} 人) ---")
 
-                # 显示用户列表带统计
+                # 显示所有用户列表（带统计）
                 print("序号 | 用户名 | 大局数 | 小局数 | 胜局数 | 净胜分 | 状态")
                 print("-" * 70)
                 for idx, user in enumerate(users, 1):
                     if len(user) >= 6:  # 有统计信息
                         uid, name, total_games, total_rounds, total_wins, net_score = user[:6]
-                    else:  # 只有基本信息
+                    else:  # 只有基本信息（理论上不会发生，但保留兼容）
                         uid, name = user
                         total_games = total_rounds = total_wins = net_score = 0
 
                     selected_ids = [s[0] for s in selected]
                     selected_flag = "✅ 已选" if uid in selected_ids else "     "
-
-                    # 计算胜率
-                    win_rate = (total_wins / total_rounds * 100) if total_rounds > 0 else 0
 
                     print(f"{idx:2d}   | {name:8} | {total_games:5d} | {total_rounds:5d} | {total_wins:5d} | {net_score:+6d} | {selected_flag}")
 
@@ -269,8 +282,8 @@ class MahjongSystem:
                             print("该玩家已被选中，请重新选择")
                             input("按回车继续...")
                         else:
-                            # 确保保存的是 (id, name) 格式
-                            selected.append((user_id, selected_user[1] if len(selected_user) > 1 else selected_user[1]))
+                            # 保存 (id, name) 格式
+                            selected.append((user_id, selected_user[1]))
                             break
                     else:
                         print("序号超出范围")
@@ -279,6 +292,7 @@ class MahjongSystem:
                     print("请输入有效数字")
                     input("按回车继续...")
 
+        # 4. 确认玩家
         self.clear_screen()
         print("\n--- 确认玩家 ---")
         for i, (_, name) in enumerate(selected, 1):
@@ -295,6 +309,7 @@ class MahjongSystem:
             input("按回车返回...")
             return
 
+        # 5. 创建游戏并进入游戏循环
         self.current_game = self.game_mgr.create_game(selected)
         self.game_play_loop()
     
@@ -703,10 +718,10 @@ class MahjongSystem:
                    g.final_score1, g.final_score2, g.final_score3, g.final_score4,
                    u1.username, u2.username, u3.username, u4.username
             FROM games g
-            JOIN users u1 ON g.player1_id = u1.id
-            JOIN users u2 ON g.player2_id = u2.id
-            JOIN users u3 ON g.player3_id = u3.id
-            JOIN users u4 ON g.player4_id = u4.id
+            LEFT JOIN users u1 ON g.player1_id = u1.id
+            LEFT JOIN users u2 ON g.player2_id = u2.id
+            LEFT JOIN users u3 ON g.player3_id = u3.id
+            LEFT JOIN users u4 ON g.player4_id = u4.id
             WHERE (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
             AND g.is_finished = 1
             ORDER BY g.created_at DESC
