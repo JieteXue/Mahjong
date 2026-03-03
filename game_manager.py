@@ -261,9 +261,22 @@ class Game:
                     VALUES (?, ?, ?)
                 ''', (round_db_id, self.players[player_idx][0], count))
 
+            # 重要：每局结束后都更新游戏表的最终分数
+            # 这样即使游戏没有正常结束，也能保存当前进度
+            c.execute('''
+                UPDATE games SET 
+                    final_score1=?, final_score2=?, final_score3=?, final_score4=?,
+                    total_rounds=?
+                WHERE id=?
+            ''', (
+                self.scores[0], self.scores[1], self.scores[2], self.scores[3],
+                len(self.rounds), self.id
+            ))
+
             self.conn.commit()
             self._update_game_total_rounds()
             print(f"✅ 第 {round_obj.round_number} 小局已保存到数据库")
+            print(f"   当前大局 #{self.id} 分数已更新: [{self.scores[0]}, {self.scores[1]}, {self.scores[2]}, {self.scores[3]}]")
 
         except Exception as e:
             print(f"保存小局时出错: {e}")
@@ -346,6 +359,7 @@ class Game:
         """结束整场游戏（大局）"""
         self.is_finished = True
         if self.current_round and self.current_round not in self.rounds:
+            print("正在保存当前小局...")
             self.current_round.finish()
             self.rounds.append(self.current_round)
             self._save_round_to_db(self.current_round, self.current_round.initial_scores)
@@ -378,8 +392,54 @@ class Game:
                 len(self.rounds), self.id
             ))
 
+            # 重要：先查询当前游戏记录，确保表结构正确
+            c.execute("PRAGMA table_info(games)")
+            columns = [col[1] for col in c.fetchall()]
+
+            if 'final_score1' in columns:
+                # 使用 final_score 列名
+                c.execute('''
+                    UPDATE games SET 
+                        is_finished=1,
+                        finished_at=?,
+                        final_score1=?, final_score2=?, final_score3=?, final_score4=?,
+                        total_rounds=?
+                    WHERE id=?
+                ''', (
+                    finished_at,
+                    self.scores[0], self.scores[1], self.scores[2], self.scores[3],
+                    len(self.rounds), self.id
+                ))
+            else:
+                # 如果还是旧结构，使用 score 列名
+                c.execute('''
+                    UPDATE games SET 
+                        is_finished=1,
+                        finished_at=?,
+                        score1=?, score2=?, score3=?, score4=?,
+                        total_rounds=?
+                    WHERE id=?
+                ''', (
+                    finished_at,
+                    self.scores[0], self.scores[1], self.scores[2], self.scores[3],
+                    len(self.rounds), self.id
+                ))
+
+            # 提交事务
             self.conn.commit()
+
+            # 验证更新是否成功
+            c.execute("SELECT final_score1, final_score2, final_score3, final_score4 FROM games WHERE id=?", (self.id,))
+            updated_scores = c.fetchone()
+            if updated_scores:
+                print(f"✅ 数据库更新确认: 分数 [{updated_scores[0]}, {updated_scores[1]}, {updated_scores[2]}, {updated_scores[3]}]")
+
             print("✅ 大局数据已保存到数据库")
+            # 立即更新用户统计
+            from game_manager import GameManager
+            game_mgr = GameManager()
+            game_mgr.update_user_stats(self)
+
         except Exception as e:
             print(f"❌ 结束游戏时出错: {e}")
             self.conn.rollback()
@@ -522,13 +582,21 @@ class GameManager:
     def update_user_stats(self, game):
         """游戏结束后更新用户统计"""
         print("\n📊 正在更新用户统计...")
+
         conn = None
         try:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
 
+            # 获取游戏结束时的最终分数
+            final_scores = game.scores
+            print(f"最终分数: {final_scores}")
+
             for i, (pid, name) in enumerate(game.players):
-                score_change = game.scores[i] - 1000
+                # 计算该玩家的净胜分变化（从1000开始的净胜分）
+                score_change = final_scores[i] - 1000
+
+                # 查询该玩家在本局中的胡牌次数
                 c.execute('''
                     SELECT COUNT(*) FROM rounds 
                     WHERE game_id=? AND winner_id=?
@@ -537,6 +605,7 @@ class GameManager:
 
                 print(f"玩家 {name}: 分数变化 {score_change:+d}, 胡牌次数: {win_count}")
 
+                # 更新用户统计
                 c.execute('''
                     UPDATE users SET 
                         total_games = total_games + 1,
@@ -546,8 +615,20 @@ class GameManager:
                     WHERE id = ?
                 ''', (len(game.rounds), win_count, score_change, pid))
 
+                # 验证更新是否成功
+                if c.rowcount == 0:
+                    print(f"⚠️ 警告: 用户 {name} (ID:{pid}) 更新失败")
+
             conn.commit()
-            print("✅ 用户统计更新完成")
+
+            # 验证更新
+            print("\n✅ 更新后的用户统计:")
+            for i, (pid, name) in enumerate(game.players):
+                c.execute("SELECT total_games, total_rounds, total_wins, net_score FROM users WHERE id=?", (pid,))
+                stats = c.fetchone()
+                if stats:
+                    print(f"  {name}: {stats[0]}大局 {stats[1]}小局 {stats[2]}胜 净胜分:{stats[3]:+d}")
+
         except Exception as e:
             print(f"❌ 更新用户统计时出错: {e}")
             if conn:

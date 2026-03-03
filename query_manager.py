@@ -42,32 +42,37 @@ class QueryManager:
         # 构建查询条件
         if season_id:
             season_condition = "AND g.season_id = ?"
-            # 参数列表：4个user_id用于player条件 + 1个season_id
-            params = [user_id, user_id, user_id, user_id, season_id]
+            # 参数列表
+            params_game = [user_id, user_id, user_id, user_id, season_id]
+            params_rounds = [user_id, user_id, user_id, user_id, season_id]
+            params_wins = [user_id, season_id]
         else:
             season_condition = ""
-            # 参数列表：4个user_id用于player条件
-            params = [user_id, user_id, user_id, user_id]
+            params_game = [user_id, user_id, user_id, user_id]
+            params_rounds = [user_id, user_id, user_id, user_id]
+            params_wins = [user_id]
 
         # 查询用户参与的大局数
-        c.execute(f'''
+        query_games = f'''
             SELECT COUNT(DISTINCT g.id) 
             FROM games g
             WHERE (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
             AND g.is_finished = 1
             {season_condition}
-        ''', params)
+        '''
+        c.execute(query_games, params_game)
         total_games = c.fetchone()[0]
 
-        # 查询用户参与的小局数
-        c.execute(f'''
+        # 查询用户参与的小局数 - 修复：直接从rounds表通过game关联查询
+        query_rounds = f'''
             SELECT COUNT(*) 
             FROM rounds r
             LEFT JOIN games g ON r.game_id = g.id
             WHERE g.is_finished = 1
             AND (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
             {season_condition}
-        ''', params)
+        '''
+        c.execute(query_rounds, params_rounds)
         total_rounds = c.fetchone()[0]
 
         # 查询用户胡牌次数
@@ -86,13 +91,11 @@ class QueryManager:
                 FROM rounds r
                 LEFT JOIN games g ON r.game_id = g.id
                 WHERE r.winner_id = ?
-                AND g.is_finished = 1
             ''', (user_id,))
         total_wins = c.fetchone()[0]
 
         # 查询用户净胜分（从games表计算）
         if season_id:
-            # 对于净胜分查询，需要重复参数：4个user_id用于CASE WHEN，4个user_id用于WHERE，1个season_id
             c.execute('''
                 SELECT 
                     SUM(CASE 
@@ -128,12 +131,15 @@ class QueryManager:
 
         conn.close()
 
+        print(f"DEBUG - 用户 {user_id} 统计: 大局={total_games}, 小局={total_rounds}, 胜局={total_wins}, 净胜分={net_score}")
+
         return {
             'total_games': total_games,
             'total_rounds': total_rounds,
             'total_wins': total_wins,
             'net_score': net_score
         }
+
     def user_stats(self):
         """查看单个用户战绩（基于实际牌局计算，兼容不足4人）"""
         season_id, season_name = self.get_season_filter()
@@ -191,7 +197,10 @@ class QueryManager:
             c.execute('''
                 SELECT g.id, g.created_at, g.finished_at, g.total_rounds,
                     u1.username, u2.username, u3.username, u4.username,
-                    g.final_score1, g.final_score2, g.final_score3, g.final_score4
+                    COALESCE(g.final_score1, 1000) as s1,
+                       COALESCE(g.final_score2, 1000) as s2,
+                       COALESCE(g.final_score3, 1000) as s3,
+                       COALESCE(g.final_score4, 1000) as s4
                 FROM games g
                 LEFT JOIN users u1 ON g.player1_id = u1.id
                 LEFT JOIN users u2 ON g.player2_id = u2.id
@@ -206,7 +215,10 @@ class QueryManager:
             c.execute('''
                 SELECT g.id, g.created_at, g.finished_at, g.total_rounds,
                     u1.username, u2.username, u3.username, u4.username,
-                    g.final_score1, g.final_score2, g.final_score3, g.final_score4
+                    COALESCE(g.final_score1, 1000) as s1,
+                       COALESCE(g.final_score2, 1000) as s2,
+                       COALESCE(g.final_score3, 1000) as s3,
+                       COALESCE(g.final_score4, 1000) as s4
                 FROM games g
                 LEFT JOIN users u1 ON g.player1_id = u1.id
                 LEFT JOIN users u2 ON g.player2_id = u2.id
@@ -245,8 +257,9 @@ class QueryManager:
         if season_id:
             c.execute('''
                 SELECT r.round_number, r.created_at, r.tai, 
-                    u2.username as winner_name,
-                    r.score_change1, r.score_change2, r.score_change3, r.score_change4
+                       u2.username as winner_name,
+                       r.score_change1, r.score_change2, r.score_change3, r.score_change4,
+                       g.id as game_id
                 FROM rounds r
                 JOIN games g ON r.game_id = g.id
                 LEFT JOIN users u2 ON r.winner_id = u2.id
@@ -257,8 +270,9 @@ class QueryManager:
         else:
             c.execute('''
                 SELECT r.round_number, r.created_at, r.tai, 
-                    u2.username as winner_name,
-                    r.score_change1, r.score_change2, r.score_change3, r.score_change4
+                       u2.username as winner_name,
+                       r.score_change1, r.score_change2, r.score_change3, r.score_change4,
+                       g.id as game_id
                 FROM rounds r
                 JOIN games g ON r.game_id = g.id
                 LEFT JOIN users u2 ON r.winner_id = u2.id
@@ -276,7 +290,7 @@ class QueryManager:
                     result = f"✅ {winner} 胡{tai}台"
                 else:
                     result = "🔄 流局"
-                print(f"  第{rnum}局 [{rtime[5:16]}] {result} 变化: {changes}")
+                print(f"  第{rnum}局 (大局{game_id}) [{rtime[5:16]}] {result} 变化: [{c1:+d},{c2:+d},{c3:+d},{c4:+d}]")
         else:
             print("\n暂无小局记录")
 
@@ -399,19 +413,37 @@ class QueryManager:
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
 
-        c.execute('''
+        # 先检查表结构
+        c.execute("PRAGMA table_info(games)")
+        columns = [col[1] for col in c.fetchall()]
+
+        # 确定正确的列名
+        if 'final_score1' in columns:
+            score_cols = ['final_score1', 'final_score2', 'final_score3', 'final_score4']
+        else:
+            score_cols = ['score1', 'score2', 'score3', 'score4']
+
+        # 构建查询
+        query = f'''
             SELECT g.id, g.created_at, g.finished_at, g.total_rounds,
                 u1.username, u2.username, u3.username, u4.username,
                 g.final_score1, g.final_score2, g.final_score3, g.final_score4,
                 g.is_finished
+                   u1.username, u2.username, u3.username, u4.username,
+                   COALESCE(g.{score_cols[0]}, 1000) as s1,
+                   COALESCE(g.{score_cols[1]}, 1000) as s2,
+                   COALESCE(g.{score_cols[2]}, 1000) as s3,
+                   COALESCE(g.{score_cols[3]}, 1000) as s4,
+                   g.is_finished
             FROM games g
             LEFT JOIN users u1 ON g.player1_id = u1.id
             LEFT JOIN users u2 ON g.player2_id = u2.id
             LEFT JOIN users u3 ON g.player3_id = u3.id
             LEFT JOIN users u4 ON g.player4_id = u4.id
             ORDER BY g.created_at DESC LIMIT 10
-        ''')
+        '''
 
+        c.execute(query)
         games = c.fetchall()
 
         if not games:
@@ -445,7 +477,10 @@ class QueryManager:
                 SELECT round_number, 
                     u.username as winner_name, 
                     tai, 
-                    score_change1, score_change2, score_change3, score_change4
+                    COALESCE(score_change1, 0) as ch1,
+                       COALESCE(score_change2, 0) as ch2,
+                       COALESCE(score_change3, 0) as ch3,
+                       COALESCE(score_change4, 0) as ch4
                 FROM rounds r
                 LEFT JOIN users u ON r.winner_id = u.id
                 WHERE r.game_id = ?

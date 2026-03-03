@@ -425,7 +425,7 @@ class MahjongSystem:
         # 显示最终统计
         print(f"\n大局 #{self.current_game.id} 统计:")
         print(f"总小局数: {len(self.current_game.rounds)}")
-        
+
         # 显示每局结果
         if self.current_game.rounds:
             print("\n小局结果:")
@@ -435,7 +435,7 @@ class MahjongSystem:
                     print(f"  第{i}局: {winner_name} 胡牌 {round_data.tai}台")
                 else:
                     print(f"  第{i}局: 流局")
-        
+
         # 显示最终分数
         print("\n最终分数:")
         for i, (pid, name) in enumerate(self.current_game.players):
@@ -443,10 +443,7 @@ class MahjongSystem:
             print(f"  {name}: {self.current_game.scores[i]} 分 ({change:+d})")
 
         # 先结束大局（保存分数到数据库）
-        self.current_game.end_game()
-
-        # 更新用户统计
-        self.game_mgr.update_user_stats(self.current_game)
+        self.current_game.end_game()  # 这里现在会调用 update_user_stats
 
         # 关闭连接
         self.current_game.close_connection()
