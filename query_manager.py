@@ -143,30 +143,30 @@ class QueryManager:
     def user_stats(self):
         """查看单个用户战绩（基于实际牌局计算，兼容不足4人）"""
         season_id, season_name = self.get_season_filter()
-    
+
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-    
+
         # 列出所有用户
         c.execute("SELECT id, username FROM users ORDER BY username")
         users = c.fetchall()
-    
+
         if not users:
             print("暂无用户")
             conn.close()
             return
-    
+
         print("\n用户列表:")
         for user in users:
             print(f"{user[0]}. {user[1]}")
-    
+
         try:
             uid = int(input("请输入用户ID: "))
         except ValueError:
             print("无效输入")
             conn.close()
             return
-    
+
         # 获取用户基本信息
         c.execute('SELECT username, created_at FROM users WHERE id=?', (uid,))
         user = c.fetchone()
@@ -174,24 +174,24 @@ class QueryManager:
             print("用户不存在")
             conn.close()
             return
-    
+
         # 从牌局记录获取实际统计
         stats = self.get_user_game_stats(uid, season_id)
-    
+
         print(f"\n=== {user[0]} 的战绩 {f'({season_name})' if season_name else ''} ===")
         print(f"注册时间: {user[1]}")
         print(f"参与大局数: {stats['total_games']}")
         print(f"参与小局数: {stats['total_rounds']}")
         print(f"胡牌次数: {stats['total_wins']}")
-    
+
         if stats['total_rounds'] > 0:
             win_rate = stats['total_wins'] / stats['total_rounds'] * 100
             print(f"小局胜率: {win_rate:.1f}%")
             avg_score_per_round = stats['net_score'] / stats['total_rounds']
             print(f"平均每局得分: {avg_score_per_round:.2f}")
-    
+
         print(f"净胜分: {stats['net_score']:+d}")
-    
+
         # 查询最近5大局
         if season_id:
             c.execute('''
@@ -228,31 +228,31 @@ class QueryManager:
                 AND g.is_finished = 1
                 ORDER BY g.created_at DESC LIMIT 5
             ''', (uid, uid, uid, uid))
-    
+
         recent_games = c.fetchall()
         if recent_games:
             print("\n最近5大局成绩:")
             for game in recent_games:
                 game_id, start_time, finish_time, rounds, p1, p2, p3, p4, s1, s2, s3, s4 = game
-    
+
                 # 构建玩家列表和分数列表（过滤 NULL）
                 players = [p for p in [p1, p2, p3, p4] if p is not None]
                 scores = [s for s in [s1, s2, s3, s4] if s is not None]
-    
+
                 # 找出该用户的得分变化
                 user_score_change = None
                 for i, name in enumerate(players):
                     if name == user[0]:
                         user_score_change = scores[i] - 1000
                         break
-                    
+
                 print(f"  大局 #{game_id} ({rounds if rounds else 0}小局) [{start_time[:10]}]: {user_score_change:+d}分")
                 # 显示所有玩家
                 display_line = "    " + "  ".join(f"{name}: {score}" for name, score in zip(players, scores))
                 print(display_line)
         else:
             print("\n暂无大局记录")
-    
+
         # 查询最近小局记录
         if season_id:
             c.execute('''
@@ -279,7 +279,7 @@ class QueryManager:
                 WHERE (g.player1_id = ? OR g.player2_id = ? OR g.player3_id = ? OR g.player4_id = ?)
                 ORDER BY r.created_at DESC LIMIT 5
             ''', (uid, uid, uid, uid))
-    
+
         recent_rounds = c.fetchall()
         if recent_rounds:
             print("\n最近5小局记录:")
@@ -297,7 +297,7 @@ class QueryManager:
                 print(f"  第{rnum}局 (大局{game_id_val}) [{rtime[5:16]}] {result} 变化: [{changes_str}]")
         else:
             print("\n暂无小局记录")
-    
+
         conn.close()
     def global_stats(self):
         """全局统计（基于实际牌局计算，兼容不足4人）"""
@@ -417,21 +417,27 @@ class QueryManager:
         """查看最近大局（支持不足4人的游戏）"""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-
+    
         # 先检查表结构
         c.execute("PRAGMA table_info(games)")
         columns = [col[1] for col in c.fetchall()]
-
+    
         # 确定正确的列名
         if 'final_score1' in columns:
             score_cols = ['final_score1', 'final_score2', 'final_score3', 'final_score4']
         else:
             score_cols = ['score1', 'score2', 'score3', 'score4']
-
-        # 修复：移除重复的列定义，确保SQL语法正确
+    
+        # 修复查询语句 - 确保正确选择所有列
         query = f'''
-            SELECT g.id, g.created_at, g.finished_at, g.total_rounds,
-                   u1.username, u2.username, u3.username, u4.username,
+            SELECT g.id, 
+                   g.created_at, 
+                   g.finished_at, 
+                   g.total_rounds,
+                   u1.username as p1_name,
+                   u2.username as p2_name,
+                   u3.username as p3_name,
+                   u4.username as p4_name,
                    COALESCE(g.{score_cols[0]}, 1000) as s1,
                    COALESCE(g.{score_cols[1]}, 1000) as s2,
                    COALESCE(g.{score_cols[2]}, 1000) as s3,
@@ -442,75 +448,75 @@ class QueryManager:
             LEFT JOIN users u2 ON g.player2_id = u2.id
             LEFT JOIN users u3 ON g.player3_id = u3.id
             LEFT JOIN users u4 ON g.player4_id = u4.id
-            ORDER BY g.created_at DESC LIMIT 10
+            WHERE g.is_finished = 1
+            ORDER BY g.created_at DESC 
+            LIMIT 10
         '''
-
+    
         c.execute(query)
         games = c.fetchall()
-
+    
         if not games:
             print("暂无大局记录")
             conn.close()
             return
-
+    
         print("\n=== 最近10大局 ===")
         for game in games:
-            game_id, start, finish, rounds, p1, p2, p3, p4, s1, s2, s3, s4, finished = game
-            status = "✅" if finished else "⏳"
-
-            # 构建玩家列表和分数列表（过滤掉 NULL 玩家）
+            # 解包所有列
+            game_id, created, finished, rounds, p1, p2, p3, p4, s1, s2, s3, s4, finished_status = game
+            
+            status = "✅" if finished_status else "⏳"
+            
+            # 构建玩家和分数列表（过滤NULL）
             players = []
             scores = []
             for name, score in zip([p1, p2, p3, p4], [s1, s2, s3, s4]):
                 if name is not None and score is not None:
                     players.append(name)
                     scores.append(score)
-
-            # 计算净胜分（仅对非 NULL 分数）
-            nets = [score - 1000 for score in scores]
-
-            print(f"\n大局 #{game_id} {status} ({start[:16] if start else ''})")
+    
+            print(f"\n大局 #{game_id} {status} ({created[:16] if created else '未知时间'})")
             print(f"  小局数: {rounds if rounds is not None else 0}")
+            
+            # 显示每个玩家的分数和净胜分
             for i, name in enumerate(players):
-                print(f"  {name}: {scores[i]} ({nets[i]:+d})")
-
-            # 显示该大局下的小局记录
+                score = scores[i]
+                net = score - 1000
+                print(f"  {name}: {score} ({net:+d})")
+    
+            # 查询该大局下的小局记录
             c.execute('''
                 SELECT round_number, 
                        u.username as winner_name, 
-                       tai, 
-                       COALESCE(score_change1, 0) as ch1,
-                       COALESCE(score_change2, 0) as ch2,
-                       COALESCE(score_change3, 0) as ch3,
-                       COALESCE(score_change4, 0) as ch4
+                       tai,
+                       score_change1, score_change2, score_change3, score_change4
                 FROM rounds r
                 LEFT JOIN users u ON r.winner_id = u.id
                 WHERE r.game_id = ?
                 ORDER BY round_number
             ''', (game_id,))
-
+    
             rounds_detail = c.fetchall()
             if rounds_detail:
                 print("  小局详情:")
-                for rd in rounds_detail[:5]:
+                for rd in rounds_detail[:5]:  # 最多显示5局
                     rnum, winner, tai, ch1, ch2, ch3, ch4 = rd
-                    # 处理可能的 NULL 值
-                    rnum = rnum if rnum is not None else 0
-                    winner = winner if winner is not None else "未知"
-                    tai = tai if tai is not None else 0
-                    # 构建变化值列表
+                    # 过滤NULL变化值
                     changes = []
                     for ch in [ch1, ch2, ch3, ch4]:
                         if ch is not None:
                             changes.append(f"{ch:+d}")
-                    changes_str = ','.join(changes)
-                    if winner != "未知":
+                    changes_str = ', '.join(changes)
+                    
+                    if winner:
                         print(f"    第{rnum}局: {winner} 胡牌{tai}台 [{changes_str}]")
                     else:
                         print(f"    第{rnum}局: 流局 [{changes_str}]")
+                
                 if len(rounds_detail) > 5:
                     print(f"    ... 还有 {len(rounds_detail)-5} 局")
-
+    
         conn.close()
     
     def recent_rounds(self):
