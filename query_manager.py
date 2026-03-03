@@ -408,6 +408,7 @@ class QueryManager:
                 print(f"  {i}. {name}: 杠{total}张 (共{rounds}局有杠)")
 
         conn.close()
+        
     def recent_games(self):
         """查看最近大局（支持不足4人的游戏）"""
         conn = sqlite3.connect(self.db_path)
@@ -423,12 +424,9 @@ class QueryManager:
         else:
             score_cols = ['score1', 'score2', 'score3', 'score4']
 
-        # 构建查询
+        # 修复：移除重复的列定义，确保SQL语法正确
         query = f'''
             SELECT g.id, g.created_at, g.finished_at, g.total_rounds,
-                u1.username, u2.username, u3.username, u4.username,
-                g.final_score1, g.final_score2, g.final_score3, g.final_score4,
-                g.is_finished
                    u1.username, u2.username, u3.username, u4.username,
                    COALESCE(g.{score_cols[0]}, 1000) as s1,
                    COALESCE(g.{score_cols[1]}, 1000) as s2,
@@ -475,9 +473,9 @@ class QueryManager:
             # 显示该大局下的小局记录
             c.execute('''
                 SELECT round_number, 
-                    u.username as winner_name, 
-                    tai, 
-                    COALESCE(score_change1, 0) as ch1,
+                       u.username as winner_name, 
+                       tai, 
+                       COALESCE(score_change1, 0) as ch1,
                        COALESCE(score_change2, 0) as ch2,
                        COALESCE(score_change3, 0) as ch3,
                        COALESCE(score_change4, 0) as ch4
@@ -496,10 +494,12 @@ class QueryManager:
                     rnum = rnum if rnum is not None else 0
                     winner = winner if winner is not None else "未知"
                     tai = tai if tai is not None else 0
-                    # 过滤 NULL 变化值
-                    changes = [ch for ch in [ch1, ch2, ch3, ch4] if ch is not None]
-                    # 将变化值转为字符串列表用于显示
-                    changes_str = ', '.join(str(ch) for ch in changes)
+                    # 构建变化值列表
+                    changes = []
+                    for ch in [ch1, ch2, ch3, ch4]:
+                        if ch is not None:
+                            changes.append(f"{ch:+d}")
+                    changes_str = ','.join(changes)
                     if winner != "未知":
                         print(f"    第{rnum}局: {winner} 胡牌{tai}台 [{changes_str}]")
                     else:
